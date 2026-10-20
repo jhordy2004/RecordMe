@@ -89,8 +89,10 @@ class WindowsDXCamBackend(CaptureBackend):
         """Detiene la captura y libera el objeto dxcam."""
         if self._camera is not None:
             try:
-                if self._camera.is_capturing:
+                if getattr(self._camera, "is_capturing", False):
                     self._camera.stop()
+                if hasattr(self._camera, "release"):
+                    self._camera.release()
             except Exception as e:
                 logger.debug("Error deteniendo cámara dxcam: %s", e)
             finally:

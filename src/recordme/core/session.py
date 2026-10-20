@@ -23,6 +23,7 @@ VALID_TRANSITIONS: dict[SessionState, set[SessionState]] = {
     SessionState.DONE: {
         SessionState.IDLE,
         SessionState.CONFIGURING,
+        SessionState.RECORDING,
         SessionState.ERROR,
     },
     SessionState.ERROR: {SessionState.IDLE},

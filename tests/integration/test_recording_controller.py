@@ -50,3 +50,29 @@ def test_recording_controller_lifecycle(qtbot: QtBot, tmp_path: Path) -> None:
     output_mp4 = finished_file[0]
     assert output_mp4.exists()
     assert output_mp4.stat().st_size > 5000
+
+
+def test_recording_controller_consecutive_runs(qtbot: QtBot, tmp_path: Path) -> None:
+    """Verifica que tras detener una grabación se pueda iniciar de inmediato una segunda grabación."""
+    session_manager = SessionManager()
+    settings = AppSettings()
+    settings.output.folder = str(tmp_path)
+    settings.output.fps = 20
+
+    controller = RecordingController(session_manager, settings)
+    controller.set_region(Rect(0, 0, 320, 240))
+
+    # Primera grabación
+    assert controller.start_recording() is True
+    qtbot.wait(400)
+    with qtbot.waitSignal(controller.recording_finished, timeout=10000):
+        controller.stop_recording()
+    assert session_manager.state.name == "DONE"
+
+    # Segunda grabación inmediata sin errores de transición
+    assert controller.start_recording() is True
+    assert session_manager.state.name == "RECORDING"
+    qtbot.wait(400)
+    with qtbot.waitSignal(controller.recording_finished, timeout=10000):
+        controller.stop_recording()
+    assert session_manager.state.name == "DONE"

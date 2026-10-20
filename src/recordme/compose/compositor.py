@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 
+import cv2
 import numpy as np
 import numpy.typing as npt
 
@@ -119,7 +120,7 @@ class Compositor:
             iteration += 1
 
     def _compose_frame(self) -> npt.NDArray[np.uint8] | None:
-        """Extrae el fotograma de la pantalla y aplica el recorte del área."""
+        """Extrae el fotograma de la pantalla y aplica el recorte del área con preservación exacta."""
         with self._state_lock:
             state = self._render_state
 
@@ -127,24 +128,27 @@ class Compositor:
         if raw_frame is None:
             return None
 
-        # Si el backend no recortó internamente, recortar aquí
-        h, w = raw_frame.shape[:2]
-        crop_x = max(0, min(state.capture_region.x, w - 2))
-        crop_y = max(0, min(state.capture_region.y, h - 2))
-        crop_w = max(2, min(state.capture_region.width, w - crop_x))
-        crop_h = max(2, min(state.capture_region.height, h - crop_y))
+        target_w = state.output_width
+        target_h = state.output_height
 
-        # Asegurar par
-        crop_w = crop_w if crop_w % 2 == 0 else crop_w - 1
-        crop_h = crop_h if crop_h % 2 == 0 else crop_h - 1
-
-        # Si el frame ya viene del tamaño de la región (como en dxcam con region)
-        if raw_frame.shape[1] == crop_w and raw_frame.shape[0] == crop_h:
+        # Caso 1: El frame ya viene con el tamaño exacto de la región capturada
+        if raw_frame.shape[1] == target_w and raw_frame.shape[0] == target_h:
             composed = raw_frame
-        elif raw_frame.shape[1] >= crop_x + crop_w and raw_frame.shape[0] >= crop_y + crop_h:
-            composed = raw_frame[crop_y : crop_y + crop_h, crop_x : crop_x + crop_w]
+        # Caso 2: El frame es la pantalla completa (dimensiones mayores que contienen la región)
+        elif (
+            raw_frame.shape[1] >= state.capture_region.x + target_w
+            and raw_frame.shape[0] >= state.capture_region.y + target_h
+        ):
+            rx = state.capture_region.x
+            ry = state.capture_region.y
+            composed = raw_frame[ry : ry + target_h, rx : rx + target_w]
         else:
-            composed = raw_frame
+            # Caso 3: Discrepancia menor (por redondeo de 1 o 2 px en backend o límites de pantalla)
+            resized: npt.NDArray[np.uint8] = np.asarray(
+                cv2.resize(raw_frame, (target_w, target_h), interpolation=cv2.INTER_LINEAR),
+                dtype=np.uint8,
+            )
+            composed = resized
 
         # Superponer capa de cámara si está activada
         if state.camera.enabled and self.camera_source is not None:

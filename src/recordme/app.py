@@ -195,10 +195,17 @@ class RecordMeApp:
             self.teleprompter_widget.resume_scrolling()
 
     def _stop_recording(self) -> None:
-        """Detiene la grabación y pausa el teleprompter."""
+        """Detiene la grabación, cierra el marco de área seleccionada y pausa el teleprompter."""
         self.controller.stop_recording()
         if self.region_frame:
-            self.region_frame.set_recording_state(False)
+            self.region_frame.close()
+            self.region_frame = None
+        # Restablecer el área a pantalla completa para que la selección desaparezca
+        screen_rect = get_primary_screen_physical_rect()
+        self.controller.set_region(screen_rect)
+        self.toolbar.update_selected_region(screen_rect)
+        if self.camera_preview:
+            self.camera_preview.update_capture_region(screen_rect)
         if self.teleprompter_widget:
             self.teleprompter_widget.pause_scrolling()
 
@@ -300,6 +307,9 @@ class RecordMeApp:
         if msg_box.clickedButton() == open_folder_btn:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
 
+        if self.session_manager.state == SessionState.DONE:
+            self.session_manager.transition_to(SessionState.IDLE)
+
     def _on_recording_failed(self, error: str) -> None:
         """Muestra error en caso de fallo durante la grabación."""
         QMessageBox.critical(
@@ -307,6 +317,8 @@ class RecordMeApp:
             APP_NAME,
             f"Ocurrió un error durante la grabación:\n{error}",
         )
+        if self.session_manager.state == SessionState.ERROR:
+            self.session_manager.transition_to(SessionState.IDLE)
 
     def show(self) -> None:
         """Muestra la barra flotante."""

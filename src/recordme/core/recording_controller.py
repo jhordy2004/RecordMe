@@ -159,7 +159,7 @@ class RecordingController(QObject):
             return False
 
         try:
-            if self.session_manager.state == SessionState.IDLE:
+            if self.session_manager.state in (SessionState.IDLE, SessionState.DONE):
                 self.session_manager.transition_to(SessionState.CONFIGURING)
             timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             temp_dir = get_temp_dir()
