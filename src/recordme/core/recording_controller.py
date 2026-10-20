@@ -62,6 +62,7 @@ class RecordingController(QObject):
         )
         self._compositor: Compositor | None = None
         self._muxer = Muxer()
+        self._mic_enabled: bool = self.settings.audio.mic_enabled
 
         self._temp_video_file: Path | None = None
         self._temp_audio_file: Path | None = None
@@ -204,10 +205,10 @@ class RecordingController(QObject):
             if not self._video_writer.start():
                 raise RuntimeError("No se pudo iniciar el proceso de FFmpeg para video.")
 
-            # 3. Iniciar grabador de audio de micrófono si está habilitado
-            if self.settings.audio.mic_enabled:
-                self._mic_recorder = MicRecorder(output_file=self._temp_audio_file)
-                self._mic_recorder.start()
+            # 3. Iniciar grabador de audio de micrófono
+            self._mic_recorder = MicRecorder(output_file=self._temp_audio_file)
+            self._mic_recorder.set_muted(not self._mic_enabled)
+            self._mic_recorder.start()
 
             # 4. Iniciar compositor
             self._compositor = Compositor(
@@ -250,10 +251,17 @@ class RecordingController(QObject):
             self.session_manager.transition_to(SessionState.RECORDING)
             logger.info("Grabación reanudada.")
 
-    def set_mic_muted(self, muted: bool) -> None:
-        """Silencia o activa el micrófono."""
+    def set_mic_enabled(self, enabled: bool) -> None:
+        """Habilita o silencia el micrófono."""
+        self._mic_enabled = enabled
+        self.settings.audio.mic_enabled = enabled
         if self._mic_recorder:
-            self._mic_recorder.set_muted(muted)
+            self._mic_recorder.set_muted(not enabled)
+        logger.info("Micrófono en controller: %s", "habilitado" if enabled else "silenciado")
+
+    def set_mic_muted(self, muted: bool) -> None:
+        """Silencia o activa el micrófono (compatibilidad)."""
+        self.set_mic_enabled(not muted)
 
     def stop_recording(self) -> None:
         """Detiene y finaliza la grabación, realizando el muxing A/V."""

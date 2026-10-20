@@ -18,11 +18,12 @@ from recordme.core.recording_controller import RecordingController
 from recordme.core.session import SessionManager
 from recordme.platform_services.factory import get_platform_services
 from recordme.ui.camera_preview import CameraPreviewWidget
+from recordme.ui.region_frame import RegionFrameWidget
 from recordme.ui.region_selector import RegionSelectorOverlay
 from recordme.ui.teleprompter import TeleprompterWidget
 from recordme.ui.teleprompter_editor import TeleprompterEditorDialog
 from recordme.ui.toolbar import FloatingToolbar
-from recordme.utils.geometry import Rect
+from recordme.utils.geometry import Rect, get_primary_screen_physical_rect
 from recordme.utils.logging_setup import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class RecordMeApp:
         self.controller = RecordingController(session_manager, settings)
         self.toolbar = FloatingToolbar(session_manager)
         self.selector_overlay: RegionSelectorOverlay | None = None
+        self.region_frame: RegionFrameWidget | None = None
         self.camera_preview: CameraPreviewWidget | None = None
         self.teleprompter_widget: TeleprompterWidget | None = None
         self.teleprompter_editor: TeleprompterEditorDialog | None = None
@@ -74,7 +76,7 @@ class RecordMeApp:
         self.toolbar.request_pause_record.connect(self._pause_recording)
         self.toolbar.request_resume_record.connect(self._resume_recording)
         self.toolbar.request_stop_record.connect(self._stop_recording)
-        self.toolbar.mic_toggled.connect(self.controller.set_mic_muted)
+        self.toolbar.mic_toggled.connect(self.controller.set_mic_enabled)
         self.toolbar.camera_toggled.connect(self._on_camera_toggled)
         self.toolbar.teleprompter_clicked.connect(self._open_teleprompter_editor)
         self.toolbar.request_exit.connect(self._exit_app)
@@ -128,7 +130,7 @@ class RecordMeApp:
         self.selector_overlay.show()
 
     def _on_region_selected(self, region: Rect) -> None:
-        """Aplica la región elegida a la barra y al controlador."""
+        """Aplica la región elegida a la barra, al controlador y al marco visual interactivo."""
         self.controller.set_region(region)
         self.toolbar.update_selected_region(region)
         if self.camera_preview:
@@ -136,10 +138,41 @@ class RecordMeApp:
         if self.selector_overlay:
             self.selector_overlay = None
 
+        screen = QApplication.primaryScreen()
+        screen_rect = get_primary_screen_physical_rect()
+        dpr = screen.devicePixelRatio() if screen else 1.0
+
+        # Si es un área personalizada (menor que la pantalla completa), mostrar marco interactivo
+        if region.width < screen_rect.width or region.height < screen_rect.height:
+            if self.region_frame is None:
+                self.region_frame = RegionFrameWidget()
+                self.region_frame.region_changed.connect(self._on_frame_region_changed)
+                self.region_frame.reset_fullscreen_requested.connect(self._reset_to_fullscreen)
+            self.region_frame.set_physical_region(region, dpr)
+            self.region_frame.show()
+        else:
+            if self.region_frame:
+                self.region_frame.close()
+                self.region_frame = None
+
+    def _on_frame_region_changed(self, region: Rect) -> None:
+        """Sincroniza la región modificada mediante los bordes del marco interactivo."""
+        self.controller.set_region(region)
+        self.toolbar.update_selected_region(region)
+        if self.camera_preview:
+            self.camera_preview.update_capture_region(region)
+
+    def _reset_to_fullscreen(self) -> None:
+        """Restaura la región de grabación a la pantalla completa."""
+        screen_rect = get_primary_screen_physical_rect()
+        self._on_region_selected(screen_rect)
+
     def _start_recording(self) -> None:
         """Inicia el proceso de grabación y arranca el scroll del teleprompter si está activo."""
         success = self.controller.start_recording()
         if success:
+            if self.region_frame:
+                self.region_frame.set_recording_state(True)
             if self.teleprompter_widget and self.teleprompter_widget.isVisible():
                 self.teleprompter_widget.start_scrolling()
         else:
@@ -164,6 +197,8 @@ class RecordMeApp:
     def _stop_recording(self) -> None:
         """Detiene la grabación y pausa el teleprompter."""
         self.controller.stop_recording()
+        if self.region_frame:
+            self.region_frame.set_recording_state(False)
         if self.teleprompter_widget:
             self.teleprompter_widget.pause_scrolling()
 
@@ -245,6 +280,8 @@ class RecordMeApp:
             self.teleprompter_widget.close()
         if self.teleprompter_editor:
             self.teleprompter_editor.close()
+        if self.region_frame:
+            self.region_frame.close()
         if self.selector_overlay:
             self.selector_overlay.close()
         self.toolbar.close()

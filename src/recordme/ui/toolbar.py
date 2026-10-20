@@ -126,11 +126,28 @@ class FloatingToolbar(QWidget):
         self.btn_record.clicked.connect(self._on_record_clicked)
         self.layout_main.addWidget(self.btn_record)
 
-        # Botón Cerrar Aplicación (✕)
-        self.btn_close_app = QPushButton("✕")
+        # Botón Cerrar Aplicación (✕ Salir)
+        self.btn_close_app = QPushButton("✕ Salir")
         self.btn_close_app.setToolTip("Cerrar RecordMe")
-        self.btn_close_app.setFixedWidth(28)
-        self.btn_close_app.setStyleSheet(self._button_style("#2C2C2C", "#C0392B"))
+        self.btn_close_app.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #5A1015;
+                color: #FFFFFF;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #C0392B;
+            }
+            QPushButton:pressed {
+                background-color: #380004;
+            }
+            """
+        )
         self.btn_close_app.clicked.connect(self.request_exit.emit)
         self.layout_main.addWidget(self.btn_close_app)
 
