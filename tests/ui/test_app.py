@@ -26,6 +26,13 @@ def test_floating_toolbar_initial_state(qtbot: QtBot) -> None:
     assert toolbar.btn_close_app.isVisible() is True
     assert toolbar.btn_censor.isVisible() is True
     assert toolbar.btn_censor.text() == "+ Censurar"
+    assert toolbar.zoom_badge.text() == "🔍 100%"
+
+    # Probar actualización de zoom en la barra
+    toolbar.update_zoom_display(1.20)
+    assert toolbar.zoom_badge.text() == "🔍 120%"
+    toolbar.update_zoom_display(1.0)
+    assert toolbar.zoom_badge.text() == "🔍 100%"
 
     # Probar alternancia de cámara
     toolbar.set_camera_enabled(True)

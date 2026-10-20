@@ -1,6 +1,8 @@
 """Servicio de atajos de teclado globales del sistema usando pynput con señales Qt seguras."""
 
+import ctypes
 import logging
+import sys
 from typing import Any
 
 from pynput import keyboard
@@ -53,6 +55,13 @@ class GlobalHotkeyService(QObject):
 
     def _is_ctrl_pressed(self) -> bool:
         """Verifica si alguna tecla Control (izquierda o derecha) está presionada."""
+        if sys.platform == "win32":
+            try:
+                # 0x11 = VK_CONTROL (evalúa instantáneamente el estado del teclado físico)
+                if ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000:
+                    return True
+            except Exception:
+                pass
         return any(
             k in self._pressed_keys
             for k in (
@@ -70,35 +79,42 @@ class GlobalHotkeyService(QObject):
         if not ctrl:
             return
 
-        # 1. Zoom In (Ctrl + '+' o Ctrl + '=')
         char = getattr(key, "char", None)
         vk = getattr(key, "vk", None)
 
-        if char in ("+", "=") or vk in (187, 107):
-            logger.debug("Hotkey global: Zoom In")
+        # 1. Zoom In (Ctrl + '+' o Ctrl + '=')
+        # vk: 187=VK_OEM_PLUS, 107=VK_ADD, 43=Plus, 61=Equal
+        if char in ("+", "=") or vk in (187, 107, 43, 61):
+            logger.info("Hotkey global detectado: Zoom In (char=%s, vk=%s)", char, vk)
             self.zoom_in.emit()
             return
 
         # 2. Zoom Out (Ctrl + '-')
-        if char == "-" or vk in (189, 109):
-            logger.debug("Hotkey global: Zoom Out")
+        # vk: 189=VK_OEM_MINUS, 109=VK_SUBTRACT, 45=Minus, 95=Underscore, 191=VK_OEM_2
+        if char in ("-", "_") or vk in (189, 109, 45, 95, 191):
+            logger.info("Hotkey global detectado: Zoom Out (char=%s, vk=%s)", char, vk)
             self.zoom_out.emit()
             return
 
         # 3. Zoom Reset (Ctrl + '0')
-        if char == "0" or vk in (48, 96):
-            logger.debug("Hotkey global: Zoom Reset")
+        # vk: 48=VK_0, 96=VK_NUMPAD0
+        if char in ("0", ")") or vk in (48, 96):
+            logger.info("Hotkey global detectado: Zoom Reset (char=%s, vk=%s)", char, vk)
             self.zoom_reset.emit()
             return
 
         # 4. Desplazamiento / Paneo con flechas (Ctrl + Flecha)
-        if key == keyboard.Key.up:
+        if key == keyboard.Key.up or vk == 38:
+            logger.info("Hotkey global detectado: Pan Arriba")
             self.pan_up.emit()
-        elif key == keyboard.Key.down:
+        elif key == keyboard.Key.down or vk == 40:
+            logger.info("Hotkey global detectado: Pan Abajo")
             self.pan_down.emit()
-        elif key == keyboard.Key.left:
+        elif key == keyboard.Key.left or vk == 37:
+            logger.info("Hotkey global detectado: Pan Izquierda")
             self.pan_left.emit()
-        elif key == keyboard.Key.right:
+        elif key == keyboard.Key.right or vk == 39:
+            logger.info("Hotkey global detectado: Pan Derecha")
             self.pan_right.emit()
 
     def _on_release(self, key: Any) -> None:

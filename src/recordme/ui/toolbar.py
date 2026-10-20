@@ -80,6 +80,14 @@ class FloatingToolbar(QWidget):
         self.area_label.setStyleSheet("color: #00B4D8; font-size: 11px;")
         self.layout_main.addWidget(self.area_label)
 
+        # Etiqueta de zoom dinámico
+        self.zoom_badge = QLabel("🔍 100%")
+        self.zoom_badge.setToolTip("Zoom activo (Usa Ctrl++ para aumentar, Ctrl+- para reducir, Ctrl+Flechas para moverte)")
+        self.zoom_badge.setStyleSheet(
+            "color: #AAAAAA; font-size: 11px; padding: 3px 6px; background: #262626; border-radius: 4px;"
+        )
+        self.layout_main.addWidget(self.zoom_badge)
+
         # Botón Seleccionar Área
         self.btn_area = QPushButton("Área")
         self.btn_area.setStyleSheet(self._button_style("#333333", "#444444"))
@@ -215,6 +223,21 @@ class FloatingToolbar(QWidget):
         """Actualiza la visualización de la resolución seleccionada."""
         self._selected_region = region
         self.area_label.setText(f"{region.width}×{region.height}")
+        self.adjustSize()
+
+    def update_zoom_display(self, zoom_level: float) -> None:
+        """Actualiza el indicador visual de zoom en la barra."""
+        pct = int(round(zoom_level * 100))
+        self.zoom_badge.setText(f"🔍 {pct}%")
+        if pct > 100:
+            self.zoom_badge.setStyleSheet(
+                "color: #00E5FF; font-weight: bold; font-size: 11px; padding: 3px 6px; "
+                "background: rgba(0, 229, 255, 0.18); border: 1px solid #00E5FF; border-radius: 4px;"
+            )
+        else:
+            self.zoom_badge.setStyleSheet(
+                "color: #AAAAAA; font-size: 11px; padding: 3px 6px; background: #262626; border-radius: 4px;"
+            )
         self.adjustSize()
 
     def _toggle_mic(self) -> None:

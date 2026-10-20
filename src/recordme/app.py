@@ -5,7 +5,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QRect, Qt, QTimer, QUrl
+from PySide6.QtCore import QRect, Qt, QUrl
 from PySide6.QtGui import QColor, QCursor, QDesktopServices, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -78,10 +78,6 @@ class RecordMeApp:
         self._zoom_cy: float = 0.5
 
         self.hotkey_service = GlobalHotkeyService(self.toolbar)
-
-        self._zoom_timer = QTimer()
-        self._zoom_timer.setInterval(33)  # 30 FPS para seguimiento dinámico
-        self._zoom_timer.timeout.connect(self._update_zoom_cursor_position)
 
         self._connect_signals()
         self._position_toolbar()
@@ -251,16 +247,33 @@ class RecordMeApp:
             )
 
     def _zoom_in_step(self) -> None:
-        """Aumenta el zoom un 10% (Ctrl++)."""
+        """Aumenta el zoom un 10% (Ctrl++). Centra en el cursor si parte del 100%."""
+        if self._zoom_level <= 1.01:
+            cursor_pos = QCursor.pos()
+            screen = QApplication.primaryScreen()
+            dpr = screen.devicePixelRatio() if screen else 1.0
+            phys_x = cursor_pos.x() * dpr
+            phys_y = cursor_pos.y() * dpr
+            reg = self.controller.current_region
+            if reg.contains(int(phys_x), int(phys_y)):
+                self._zoom_cx = max(0.05, min(0.95, (phys_x - reg.x) / max(1, reg.width)))
+                self._zoom_cy = max(0.05, min(0.95, (phys_y - reg.y) / max(1, reg.height)))
+            else:
+                self._zoom_cx = 0.5
+                self._zoom_cy = 0.5
+
         self._zoom_level = min(3.0, round(self._zoom_level + 0.10, 2))
         self._apply_zoom()
-        logger.info("Zoom aumentado a %.0f%%", self._zoom_level * 100)
+        logger.info("Zoom aumentado a %.0f%% (centro: %.2f, %.2f)", self._zoom_level * 100, self._zoom_cx, self._zoom_cy)
 
     def _zoom_out_step(self) -> None:
         """Reduce el zoom un 10% (Ctrl+-)."""
         self._zoom_level = max(1.0, round(self._zoom_level - 0.10, 2))
+        if self._zoom_level <= 1.01:
+            self._zoom_cx = 0.5
+            self._zoom_cy = 0.5
         self._apply_zoom()
-        logger.info("Zoom reducido a %.0f%%", self._zoom_level * 100)
+        logger.info("Zoom reducido a %.0f%% (centro: %.2f, %.2f)", self._zoom_level * 100, self._zoom_cx, self._zoom_cy)
 
     def _zoom_reset(self) -> None:
         """Restablece el zoom a 100% (Ctrl+0)."""
@@ -274,41 +287,18 @@ class RecordMeApp:
         """Desplaza el encuadre de zoom con las flechas del teclado (Ctrl+Flechas)."""
         if self._zoom_level <= 1.01:
             return
-        self._zoom_cx = max(0.0, min(1.0, self._zoom_cx + dx))
-        self._zoom_cy = max(0.0, min(1.0, self._zoom_cy + dy))
+        self._zoom_cx = max(0.0, min(1.0, round(self._zoom_cx + dx, 3)))
+        self._zoom_cy = max(0.0, min(1.0, round(self._zoom_cy + dy, 3)))
         self._apply_zoom()
+        logger.info("Paneo de zoom desplazado: centro en (%.2f, %.2f)", self._zoom_cx, self._zoom_cy)
 
     def _apply_zoom(self) -> None:
-        """Aplica el nivel de zoom y centro al controlador."""
-        if self._zoom_level > 1.05:
-            if not self._zoom_timer.isActive():
-                self._zoom_timer.start()
-        else:
-            self._zoom_timer.stop()
+        """Aplica el nivel de zoom y centro al controlador y actualiza la barra."""
+        if self._zoom_level <= 1.01:
             self._zoom_cx = 0.5
             self._zoom_cy = 0.5
-
         self.controller.set_zoom(self._zoom_level, self._zoom_cx, self._zoom_cy)
-
-    def _update_zoom_cursor_position(self) -> None:
-        """Sigue suavemente la posición del cursor si se mueve en pantalla."""
-        if self._zoom_level <= 1.05:
-            return
-
-        cursor_pos = QCursor.pos()
-        screen = QApplication.primaryScreen()
-        dpr = screen.devicePixelRatio() if screen else 1.0
-
-        phys_x = cursor_pos.x() * dpr
-        phys_y = cursor_pos.y() * dpr
-        reg = self.controller.current_region
-
-        if reg.contains(int(phys_x), int(phys_y)):
-            norm_x = (phys_x - reg.x) / max(1, reg.width)
-            norm_y = (phys_y - reg.y) / max(1, reg.height)
-            self._zoom_cx = 0.8 * self._zoom_cx + 0.2 * norm_x
-            self._zoom_cy = 0.8 * self._zoom_cy + 0.2 * norm_y
-            self.controller.set_zoom(self._zoom_level, self._zoom_cx, self._zoom_cy)
+        self.toolbar.update_zoom_display(self._zoom_level)
 
     def _add_censor_box(self) -> None:
         """Crea un nuevo recuadro interactivo de censura en pantalla."""
@@ -486,7 +476,6 @@ class RecordMeApp:
             self.region_frame.close()
         if self.selector_overlay:
             self.selector_overlay.close()
-        self._zoom_timer.stop()
         self.toolbar.close()
         QApplication.quit()
 
