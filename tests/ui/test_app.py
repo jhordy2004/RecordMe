@@ -23,6 +23,7 @@ def test_floating_toolbar_initial_state(qtbot: QtBot) -> None:
     assert toolbar.btn_pause.isVisible() is False
     assert toolbar.timer_label.isVisible() is False
     assert toolbar.btn_cam.text() == "Cámara: Off"
+    assert toolbar.btn_close_app.isVisible() is True
 
     # Probar alternancia de cámara
     toolbar.set_camera_enabled(True)

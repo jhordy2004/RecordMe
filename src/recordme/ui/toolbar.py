@@ -31,6 +31,7 @@ class FloatingToolbar(QWidget):
     mic_toggled = Signal(bool)
     camera_toggled = Signal(bool)
     teleprompter_clicked = Signal()
+    request_exit = Signal()
 
     def __init__(self, session_manager: SessionManager, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -124,6 +125,14 @@ class FloatingToolbar(QWidget):
         self.btn_record.setStyleSheet(self._button_style("#E50914", "#FF1E27"))
         self.btn_record.clicked.connect(self._on_record_clicked)
         self.layout_main.addWidget(self.btn_record)
+
+        # Botón Cerrar Aplicación (✕)
+        self.btn_close_app = QPushButton("✕")
+        self.btn_close_app.setToolTip("Cerrar RecordMe")
+        self.btn_close_app.setFixedWidth(28)
+        self.btn_close_app.setStyleSheet(self._button_style("#2C2C2C", "#C0392B"))
+        self.btn_close_app.clicked.connect(self.request_exit.emit)
+        self.layout_main.addWidget(self.btn_close_app)
 
         self.adjustSize()
 

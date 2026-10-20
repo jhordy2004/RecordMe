@@ -181,7 +181,7 @@ class TeleprompterEditorDialog(QDialog):
         btn_layout = QHBoxLayout()
         self.btn_test = QPushButton("▶ Probar Teleprompter")
         self.btn_test.setStyleSheet("background-color: #2E7D32; color: #FFFFFF; font-weight: bold; padding: 8px 18px; border-radius: 6px;")
-        self.btn_test.clicked.connect(self._toggle_test)
+        self.btn_test.clicked.connect(self._start_test)
         btn_layout.addWidget(self.btn_test)
 
         btn_layout.addStretch()
@@ -262,31 +262,34 @@ class TeleprompterEditorDialog(QDialog):
             last_script=self.text_edit.toPlainText(),
         )
 
+    def _start_test(self) -> None:
+        """Inicia el modo de prueba: oculta temporalmente el editor y muestra el teleprompter interactivo."""
+        text = self.text_edit.toPlainText().strip()
+        settings = self.get_current_settings()
+        self.hide()
+        self.test_requested.emit(text, settings)
+
     def _toggle_test(self) -> None:
-        """Alterna entre iniciar la prueba del teleprompter y detenerla."""
-        if not self._is_testing:
-            self._is_testing = True
-            self.btn_test.setText("⏹ Detener Prueba")
-            self.btn_test.setStyleSheet("background-color: #C0392B; color: #FFFFFF; font-weight: bold; padding: 8px 18px; border-radius: 6px;")
-            text = self.text_edit.toPlainText().strip()
-            settings = self.get_current_settings()
-            self.test_requested.emit(text, settings)
-        else:
-            self._is_testing = False
-            self.btn_test.setText("▶ Probar Teleprompter")
-            self.btn_test.setStyleSheet("background-color: #2E7D32; color: #FFFFFF; font-weight: bold; padding: 8px 18px; border-radius: 6px;")
-            self.stop_test_requested.emit()
+        """Compatibilidad con pruebas unitarias."""
+        self._start_test()
+
+    def update_from_settings(self, settings: TeleprompterSettings) -> None:
+        """Actualiza los campos del editor a partir de un objeto de ajustes."""
+        self.settings = settings
+        if settings.last_script:
+            self.text_edit.setPlainText(settings.last_script)
+        self.sec_spin.setValue(settings.seconds_per_line)
+        self.font_spin.setValue(settings.font_size)
+        self.lines_spin.setValue(settings.lines_visible)
+        self.opacity_spin.setValue(int(settings.opacity * 100))
+        self._update_stats()
 
     def _on_cancel_clicked(self) -> None:
-        """Detiene cualquier prueba activa y cierra el diálogo."""
-        if self._is_testing:
-            self._toggle_test()
+        """Cierra el diálogo descartando cambios no aplicados."""
         self.reject()
 
     def _on_apply_clicked(self) -> None:
         """Aplica los cambios, emite la señal y cierra el diálogo sin cerrar la app."""
-        if self._is_testing:
-            self._toggle_test()
         text = self.text_edit.toPlainText().strip()
         settings = self.get_current_settings()
         self.settings_applied.emit(text, settings)

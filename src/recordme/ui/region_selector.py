@@ -122,11 +122,42 @@ class RegionSelectorOverlay(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        """Finaliza el trazado del rectángulo."""
+        """Finaliza el trazado del rectángulo y confirma automáticamente si el área es válida."""
         if event.button() == Qt.MouseButton.LeftButton and self._is_drawing:
             self._is_drawing = False
             self._current_pos = event.pos()
+            selected = self._get_current_rect()
+            if selected and selected.width() >= 20 and selected.height() >= 20:
+                self._confirm_rect(selected)
+                return
             self.update()
+
+    def _confirm_rect(self, selected: QRect | None) -> None:
+        """Calcula el Rect en píxeles físicos pares, emite la señal y cierra el overlay."""
+        if selected is None or selected.width() < 10 or selected.height() < 10:
+            # Pantalla completa por defecto si no dibujó nada
+            primary_screen = QGuiApplication.primaryScreen()
+            if primary_screen:
+                geom = primary_screen.geometry()
+                phys_rect = Rect(
+                    x=to_physical_pixels(geom.x(), self._dpr),
+                    y=to_physical_pixels(geom.y(), self._dpr),
+                    width=to_physical_pixels(geom.width(), self._dpr),
+                    height=to_physical_pixels(geom.height(), self._dpr),
+                ).to_even()
+            else:
+                phys_rect = Rect(0, 0, 1920, 1080)
+        else:
+            phys_rect = Rect(
+                x=to_physical_pixels(selected.x(), self._dpr),
+                y=to_physical_pixels(selected.y(), self._dpr),
+                width=to_physical_pixels(selected.width(), self._dpr),
+                height=to_physical_pixels(selected.height(), self._dpr),
+            ).to_even()
+
+        logger.info("Región confirmada en píxeles físicos: %s", phys_rect)
+        self.region_selected.emit(phys_rect)
+        self.close()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         """Maneja atajos de teclado Enter (confirmar) y Esc (cancelar)."""
@@ -135,28 +166,4 @@ class RegionSelectorOverlay(QWidget):
             self.selection_canceled.emit()
             self.close()
         elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            selected = self._get_current_rect()
-            if selected is None or selected.width() < 10 or selected.height() < 10:
-                # Pantalla completa por defecto si no dibujó nada
-                primary_screen = QGuiApplication.primaryScreen()
-                if primary_screen:
-                    geom = primary_screen.geometry()
-                    phys_rect = Rect(
-                        x=to_physical_pixels(geom.x(), self._dpr),
-                        y=to_physical_pixels(geom.y(), self._dpr),
-                        width=to_physical_pixels(geom.width(), self._dpr),
-                        height=to_physical_pixels(geom.height(), self._dpr),
-                    ).to_even()
-                else:
-                    phys_rect = Rect(0, 0, 1920, 1080)
-            else:
-                phys_rect = Rect(
-                    x=to_physical_pixels(selected.x(), self._dpr),
-                    y=to_physical_pixels(selected.y(), self._dpr),
-                    width=to_physical_pixels(selected.width(), self._dpr),
-                    height=to_physical_pixels(selected.height(), self._dpr),
-                ).to_even()
-
-            logger.info("Región confirmada en píxeles físicos: %s", phys_rect)
-            self.region_selected.emit(phys_rect)
-            self.close()
+            self._confirm_rect(self._get_current_rect())

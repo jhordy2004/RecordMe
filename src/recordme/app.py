@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from recordme.config.settings import AppSettings, TeleprompterSettings
 from recordme.constants import APP_DISPLAY_NAME, APP_NAME, APP_VERSION
+from recordme.core.events import SessionState
 from recordme.core.recording_controller import RecordingController
 from recordme.core.session import SessionManager
 from recordme.platform_services.factory import get_platform_services
@@ -60,6 +61,8 @@ class RecordMeApp:
         self.selector_overlay: RegionSelectorOverlay | None = None
         self.camera_preview: CameraPreviewWidget | None = None
         self.teleprompter_widget: TeleprompterWidget | None = None
+        self.teleprompter_editor: TeleprompterEditorDialog | None = None
+        self._is_testing_teleprompter = False
 
         self._connect_signals()
         self._position_toolbar()
@@ -74,6 +77,7 @@ class RecordMeApp:
         self.toolbar.mic_toggled.connect(self.controller.set_mic_muted)
         self.toolbar.camera_toggled.connect(self._on_camera_toggled)
         self.toolbar.teleprompter_clicked.connect(self._open_teleprompter_editor)
+        self.toolbar.request_exit.connect(self._exit_app)
 
         self.controller.recording_finished.connect(self._on_recording_finished)
         self.controller.recording_failed.connect(self._on_recording_failed)
@@ -105,13 +109,16 @@ class RecordMeApp:
                 self.camera_preview = None
                 logger.info("Vista previa de cámara cerrada.")
 
-    def _position_toolbar(self) -> None:
-        """Ubica la barra flotante centrada en la parte superior de la pantalla."""
+    def _position_toolbar(self, at_bottom: bool = False) -> None:
+        """Ubica la barra flotante centrada en la parte superior o inferior de la pantalla."""
         screen = QApplication.primaryScreen()
         if screen:
             geom = screen.availableGeometry()
             x = geom.x() + (geom.width() - self.toolbar.width()) // 2
-            y = geom.y() + 40
+            if at_bottom:
+                y = geom.y() + geom.height() - self.toolbar.height() - 30
+            else:
+                y = geom.y() + 40
             self.toolbar.move(x, y)
 
     def _open_region_selector(self) -> None:
@@ -161,16 +168,21 @@ class RecordMeApp:
             self.teleprompter_widget.pause_scrolling()
 
     def _open_teleprompter_editor(self) -> None:
-        """Abre el editor completo del teleprompter."""
-        editor = TeleprompterEditorDialog(
-            current_text=self.settings.teleprompter.last_script,
-            settings=self.settings.teleprompter,
-            parent=self.toolbar,
-        )
-        editor.settings_applied.connect(self._on_teleprompter_applied)
-        editor.test_requested.connect(self._on_teleprompter_test)
-        editor.stop_test_requested.connect(self._on_teleprompter_stop_test)
-        editor.exec()
+        """Abre el editor completo del teleprompter de forma interactiva y no bloqueante."""
+        if self.teleprompter_editor is None:
+            self.teleprompter_editor = TeleprompterEditorDialog(
+                current_text=self.settings.teleprompter.last_script,
+                settings=self.settings.teleprompter,
+            )
+            self.teleprompter_editor.settings_applied.connect(self._on_teleprompter_applied)
+            self.teleprompter_editor.test_requested.connect(self._on_teleprompter_test)
+            self.teleprompter_editor.stop_test_requested.connect(self._on_teleprompter_stop_test)
+        else:
+            self.teleprompter_editor.update_from_settings(self.settings.teleprompter)
+
+        self.teleprompter_editor.show()
+        self.teleprompter_editor.raise_()
+        self.teleprompter_editor.activateWindow()
 
     def _on_teleprompter_applied(self, text: str, settings: TeleprompterSettings) -> None:
         """Aplica el texto y ajustes al widget flotante del teleprompter y guarda configuración."""
@@ -185,12 +197,14 @@ class RecordMeApp:
             self.teleprompter_widget.set_script(text)
 
         self.teleprompter_widget.show()
-        # Asegurar que la barra flotante permanezca encima y visible para grabar
+        # Reposicionar la barra flotante abajo para que no colisione con el teleprompter arriba
+        self._position_toolbar(at_bottom=True)
         self.toolbar.show()
-        logger.info("Teleprompter visible y listo.")
+        logger.info("Teleprompter visible y barra reposicionada en la parte inferior.")
 
     def _on_teleprompter_test(self, text: str, settings: TeleprompterSettings) -> None:
-        """Lanza una prueba en vivo del teleprompter con auto-scroll para calibrar."""
+        """Lanza una prueba interactiva del teleprompter con controles habilitados."""
+        self._is_testing_teleprompter = True
         if self.teleprompter_widget is None:
             self.teleprompter_widget = TeleprompterWidget(text=text, settings=settings)
             self.teleprompter_widget.closed.connect(self._on_teleprompter_closed)
@@ -209,7 +223,32 @@ class RecordMeApp:
 
     def _on_teleprompter_closed(self) -> None:
         """Maneja el evento cuando el usuario cierra el teleprompter."""
-        logger.info("Teleprompter cerrado por el usuario.")
+        logger.info("Teleprompter cerrado.")
+        if self._is_testing_teleprompter:
+            self._is_testing_teleprompter = False
+            if self.teleprompter_editor:
+                self.teleprompter_editor.show()
+                self.teleprompter_editor.raise_()
+                self.teleprompter_editor.activateWindow()
+        else:
+            # Si el teleprompter no está en prueba y se cierra, restaurar la barra arriba
+            self._position_toolbar(at_bottom=False)
+
+    def _exit_app(self) -> None:
+        """Cierra ordenadamente la aplicación liberando todos los recursos."""
+        logger.info("Cierre de aplicación solicitado.")
+        if self.session_manager.state in (SessionState.RECORDING, SessionState.PAUSED):
+            self.controller.stop_recording()
+        if self.camera_preview:
+            self.camera_preview.close()
+        if self.teleprompter_widget:
+            self.teleprompter_widget.close()
+        if self.teleprompter_editor:
+            self.teleprompter_editor.close()
+        if self.selector_overlay:
+            self.selector_overlay.close()
+        self.toolbar.close()
+        QApplication.quit()
 
     def _on_recording_finished(self, output_path: Path) -> None:
         """Muestra aviso al finalizar con opción para abrir la carpeta contenedora."""
