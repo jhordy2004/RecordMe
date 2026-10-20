@@ -24,14 +24,8 @@ def test_floating_toolbar_initial_state(qtbot: QtBot) -> None:
     assert toolbar.timer_label.isVisible() is False
     assert toolbar.btn_cam.text() == "Cámara: Off"
     assert toolbar.btn_close_app.isVisible() is True
-    assert toolbar.btn_zoom.text() == "Zoom: 1.0x"
     assert toolbar.btn_censor.isVisible() is True
-
-    # Probar alternancia de zoom
-    toolbar._toggle_zoom()
-    assert toolbar.btn_zoom.text() == "Zoom: 2.0x"
-    toolbar._toggle_zoom()
-    assert toolbar.btn_zoom.text() == "Zoom: 1.0x"
+    assert toolbar.btn_censor.text() == "+ Censurar"
 
     # Probar alternancia de cámara
     toolbar.set_camera_enabled(True)
@@ -81,3 +75,4 @@ def test_recordme_app_instantiation(qtbot: QtBot) -> None:
 
     assert app.toolbar.isVisible()
     assert app.controller is not None
+    app.hotkey_service.stop()

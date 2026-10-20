@@ -3,7 +3,7 @@
 import logging
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPaintEvent, QShowEvent, QWheelEvent
+from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPaintEvent, QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -31,7 +31,6 @@ class FloatingToolbar(QWidget):
     mic_toggled = Signal(bool)
     camera_toggled = Signal(bool)
     teleprompter_clicked = Signal()
-    zoom_changed = Signal(float)
     censor_clicked = Signal()
     request_exit = Signal()
 
@@ -44,7 +43,6 @@ class FloatingToolbar(QWidget):
         self._elapsed_seconds = 0
         self._mic_enabled = True
         self._cam_enabled = False
-        self._zoom_level = 1.0
         self._selected_region: Rect = get_primary_screen_physical_rect()
 
         # Configuración visual flotante
@@ -106,17 +104,10 @@ class FloatingToolbar(QWidget):
         self.btn_teleprompter.clicked.connect(self.teleprompter_clicked.emit)
         self.layout_main.addWidget(self.btn_teleprompter)
 
-        # Botón Zoom en Vivo
-        self.btn_zoom = QPushButton("Zoom: 1.0x")
-        self.btn_zoom.setStyleSheet(self._button_style("#333333", "#444444"))
-        self.btn_zoom.setToolTip("Alternar o ajustar zoom con clic o rueda del ratón")
-        self.btn_zoom.clicked.connect(self._toggle_zoom)
-        self.layout_main.addWidget(self.btn_zoom)
-
         # Botón Censura en Tiempo Real
-        self.btn_censor = QPushButton("Censura")
+        self.btn_censor = QPushButton("+ Censurar")
         self.btn_censor.setStyleSheet(self._button_style("#333333", "#444444"))
-        self.btn_censor.setToolTip("Definir o editar áreas de censura (blur/pixelado)")
+        self.btn_censor.setToolTip("Añadir recuadro flotante de censura ajustable")
         self.btn_censor.clicked.connect(self.censor_clicked.emit)
         self.layout_main.addWidget(self.btn_censor)
 
@@ -251,33 +242,6 @@ class FloatingToolbar(QWidget):
             if self._cam_enabled
             else self._button_style("#333333", "#444444")
         )
-
-    def _toggle_zoom(self) -> None:
-        """Alterna el nivel de zoom entre 1.0x y 2.0x."""
-        if self._zoom_level <= 1.05:
-            self.set_zoom_level(2.0)
-        else:
-            self.set_zoom_level(1.0)
-
-    def set_zoom_level(self, level: float) -> None:
-        """Actualiza el nivel de zoom mostrado en el botón y emite la señal."""
-        self._zoom_level = max(1.0, min(level, 4.0))
-        self.btn_zoom.setText(f"Zoom: {self._zoom_level:.1f}x")
-        if self._zoom_level > 1.05:
-            self.btn_zoom.setStyleSheet(self._button_style("#007ACC", "#0098FF"))
-        else:
-            self.btn_zoom.setStyleSheet(self._button_style("#333333", "#444444"))
-        self.zoom_changed.emit(self._zoom_level)
-
-    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
-        """Permite ajustar el nivel de zoom con la rueda del ratón al apuntar a la barra."""
-        delta = event.angleDelta().y()
-        if delta != 0:
-            step = 0.25 if delta > 0 else -0.25
-            self.set_zoom_level(self._zoom_level + step)
-            event.accept()
-        else:
-            super().wheelEvent(event)
 
     def _on_record_clicked(self) -> None:
         """Maneja el clic del botón principal (Grabar o Detener)."""

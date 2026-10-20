@@ -2,6 +2,7 @@
 
 import logging
 import sys
+import uuid
 from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt, QTimer, QUrl
@@ -15,10 +16,12 @@ from recordme.config.settings import AppSettings, TeleprompterSettings
 from recordme.constants import APP_DISPLAY_NAME, APP_NAME, APP_VERSION
 from recordme.core.events import SessionState
 from recordme.core.recording_controller import RecordingController
+from recordme.core.render_state import CensorRegion
 from recordme.core.session import SessionManager
 from recordme.platform_services.factory import get_platform_services
+from recordme.platform_services.hotkeys import GlobalHotkeyService
 from recordme.ui.camera_preview import CameraPreviewWidget
-from recordme.ui.censor_overlay import CensorOverlay
+from recordme.ui.censor_box import CensorBoxWidget
 from recordme.ui.countdown import CountdownOverlay
 from recordme.ui.region_frame import RegionFrameWidget
 from recordme.ui.region_selector import RegionSelectorOverlay
@@ -67,16 +70,22 @@ class RecordMeApp:
         self.teleprompter_widget: TeleprompterWidget | None = None
         self.teleprompter_editor: TeleprompterEditorDialog | None = None
         self.countdown_overlay: CountdownOverlay | None = None
-        self.censor_overlay: CensorOverlay | None = None
+        self.censor_boxes: dict[str, CensorBoxWidget] = {}
         self._is_testing_teleprompter = False
-        self._current_zoom: float = 1.0
+
+        self._zoom_level: float = 1.0
+        self._zoom_cx: float = 0.5
+        self._zoom_cy: float = 0.5
+
+        self.hotkey_service = GlobalHotkeyService(self.toolbar)
 
         self._zoom_timer = QTimer()
-        self._zoom_timer.setInterval(33)  # 30 FPS para seguimiento suave del cursor
+        self._zoom_timer.setInterval(33)  # 30 FPS para seguimiento dinámico
         self._zoom_timer.timeout.connect(self._update_zoom_cursor_position)
 
         self._connect_signals()
         self._position_toolbar()
+        self.hotkey_service.start()
 
     def _connect_signals(self) -> None:
         """Conecta las señales entre la barra flotante y el controlador de grabación."""
@@ -88,9 +97,17 @@ class RecordMeApp:
         self.toolbar.mic_toggled.connect(self.controller.set_mic_enabled)
         self.toolbar.camera_toggled.connect(self._on_camera_toggled)
         self.toolbar.teleprompter_clicked.connect(self._open_teleprompter_editor)
-        self.toolbar.zoom_changed.connect(self._on_zoom_changed)
-        self.toolbar.censor_clicked.connect(self._open_censor_overlay)
+        self.toolbar.censor_clicked.connect(self._add_censor_box)
         self.toolbar.request_exit.connect(self._exit_app)
+
+        # Atajos globales de zoom y desplazamiento
+        self.hotkey_service.zoom_in.connect(self._zoom_in_step)
+        self.hotkey_service.zoom_out.connect(self._zoom_out_step)
+        self.hotkey_service.zoom_reset.connect(self._zoom_reset)
+        self.hotkey_service.pan_up.connect(lambda: self._pan_step(0.0, -0.06))
+        self.hotkey_service.pan_down.connect(lambda: self._pan_step(0.0, 0.06))
+        self.hotkey_service.pan_left.connect(lambda: self._pan_step(-0.06, 0.0))
+        self.hotkey_service.pan_right.connect(lambda: self._pan_step(0.06, 0.0))
 
         self.controller.recording_finished.connect(self._on_recording_finished)
         self.controller.recording_failed.connect(self._on_recording_failed)
@@ -233,20 +250,49 @@ class RecordMeApp:
                 "No se pudo iniciar la grabación. Consulta los registros de log para más detalles.",
             )
 
-    def _on_zoom_changed(self, zoom: float) -> None:
-        """Actualiza el nivel de zoom objetivo y arranca/detiene el seguimiento dinámico del cursor."""
-        self._current_zoom = zoom
-        if zoom > 1.05:
-            self._update_zoom_cursor_position()
+    def _zoom_in_step(self) -> None:
+        """Aumenta el zoom un 10% (Ctrl++)."""
+        self._zoom_level = min(3.0, round(self._zoom_level + 0.10, 2))
+        self._apply_zoom()
+        logger.info("Zoom aumentado a %.0f%%", self._zoom_level * 100)
+
+    def _zoom_out_step(self) -> None:
+        """Reduce el zoom un 10% (Ctrl+-)."""
+        self._zoom_level = max(1.0, round(self._zoom_level - 0.10, 2))
+        self._apply_zoom()
+        logger.info("Zoom reducido a %.0f%%", self._zoom_level * 100)
+
+    def _zoom_reset(self) -> None:
+        """Restablece el zoom a 100% (Ctrl+0)."""
+        self._zoom_level = 1.0
+        self._zoom_cx = 0.5
+        self._zoom_cy = 0.5
+        self._apply_zoom()
+        logger.info("Zoom restablecido al 100%%.")
+
+    def _pan_step(self, dx: float, dy: float) -> None:
+        """Desplaza el encuadre de zoom con las flechas del teclado (Ctrl+Flechas)."""
+        if self._zoom_level <= 1.01:
+            return
+        self._zoom_cx = max(0.0, min(1.0, self._zoom_cx + dx))
+        self._zoom_cy = max(0.0, min(1.0, self._zoom_cy + dy))
+        self._apply_zoom()
+
+    def _apply_zoom(self) -> None:
+        """Aplica el nivel de zoom y centro al controlador."""
+        if self._zoom_level > 1.05:
             if not self._zoom_timer.isActive():
                 self._zoom_timer.start()
         else:
             self._zoom_timer.stop()
-            self.controller.set_zoom(1.0, 0.5, 0.5)
+            self._zoom_cx = 0.5
+            self._zoom_cy = 0.5
+
+        self.controller.set_zoom(self._zoom_level, self._zoom_cx, self._zoom_cy)
 
     def _update_zoom_cursor_position(self) -> None:
-        """Calcula las coordenadas relativas normalizadas del cursor respecto a la región de captura."""
-        if self._current_zoom <= 1.05:
+        """Sigue suavemente la posición del cursor si se mueve en pantalla."""
+        if self._zoom_level <= 1.05:
             return
 
         cursor_pos = QCursor.pos()
@@ -257,19 +303,62 @@ class RecordMeApp:
         phys_y = cursor_pos.y() * dpr
         reg = self.controller.current_region
 
-        # Coordenadas normalizadas [0.0, 1.0] dentro de la región capturada
-        norm_x = (phys_x - reg.x) / max(1, reg.width)
-        norm_y = (phys_y - reg.y) / max(1, reg.height)
-        clamped_x = max(0.0, min(norm_x, 1.0))
-        clamped_y = max(0.0, min(norm_y, 1.0))
+        if reg.contains(int(phys_x), int(phys_y)):
+            norm_x = (phys_x - reg.x) / max(1, reg.width)
+            norm_y = (phys_y - reg.y) / max(1, reg.height)
+            self._zoom_cx = 0.8 * self._zoom_cx + 0.2 * norm_x
+            self._zoom_cy = 0.8 * self._zoom_cy + 0.2 * norm_y
+            self.controller.set_zoom(self._zoom_level, self._zoom_cx, self._zoom_cy)
 
-        self.controller.set_zoom(self._current_zoom, clamped_x, clamped_y)
+    def _add_censor_box(self) -> None:
+        """Crea un nuevo recuadro interactivo de censura en pantalla."""
+        screen = QApplication.primaryScreen()
+        dpr = screen.devicePixelRatio() if screen else 1.0
 
-    def _open_censor_overlay(self) -> None:
-        """Abre el editor interactivo de censura sobre la pantalla."""
-        self.censor_overlay = CensorOverlay(existing_regions=self.controller._censor_regions)
-        self.censor_overlay.regions_changed.connect(self.controller.set_censor_regions)
-        self.censor_overlay.show()
+        reg = self.controller.current_region
+        log_w = to_logical_pixels(reg.width, dpr)
+        log_h = to_logical_pixels(reg.height, dpr)
+        log_x = to_logical_pixels(reg.x, dpr)
+        log_y = to_logical_pixels(reg.y, dpr)
+
+        box_w = min(260, max(120, log_w // 2))
+        box_h = min(140, max(80, log_h // 3))
+        cx = log_x + (log_w - box_w) // 2
+        cy = log_y + (log_h - box_h) // 2
+
+        box_id = str(uuid.uuid4())[:8]
+        initial_rect = QRect(cx, cy, box_w, box_h)
+
+        box = CensorBoxWidget(box_id=box_id, initial_rect=initial_rect, mode="blur", dpr=dpr)
+        box.geometry_changed.connect(self._on_censor_box_changed)
+        box.box_closed.connect(self._on_censor_box_closed)
+
+        self.censor_boxes[box_id] = box
+        self._sync_censor_regions()
+        box.show()
+        logger.info("Caja de censura creada: %s en %s", box_id, initial_rect)
+
+    def _on_censor_box_changed(self, box_id: str, phys_rect: Rect, mode: str) -> None:
+        """Actualiza las regiones de censura activas al mover o redimensionar una caja."""
+        self._sync_censor_regions()
+
+    def _on_censor_box_closed(self, box_id: str) -> None:
+        """Elimina la caja de censura y actualiza el compositor."""
+        self.censor_boxes.pop(box_id, None)
+        self._sync_censor_regions()
+
+    def _sync_censor_regions(self) -> None:
+        """Construye y envía la lista actualizada de CensorRegion al controlador."""
+        regions = [
+            CensorRegion(
+                id=box.box_id,
+                rect=box.get_physical_region(),
+                mode=box.mode,
+                active=True,
+            )
+            for box in self.censor_boxes.values()
+        ]
+        self.controller.set_censor_regions(regions)
 
     def _pause_recording(self) -> None:
         """Pausa la grabación y el teleprompter simultáneamente."""
@@ -289,6 +378,19 @@ class RecordMeApp:
         if self.region_frame:
             self.region_frame.close()
             self.region_frame = None
+
+        # Cerrar recuadros de censura y limpiar estado
+        for box in list(self.censor_boxes.values()):
+            box.close()
+        self.censor_boxes.clear()
+        self.controller.set_censor_regions([])
+
+        # Reset zoom al terminar
+        self._zoom_level = 1.0
+        self._zoom_cx = 0.5
+        self._zoom_cy = 0.5
+        self._apply_zoom()
+
         # Restablecer el área a pantalla completa para que la selección desaparezca
         screen_rect = get_primary_screen_physical_rect()
         self.controller.set_region(screen_rect)
@@ -370,6 +472,10 @@ class RecordMeApp:
         logger.info("Cierre de aplicación solicitado.")
         if self.session_manager.state in (SessionState.RECORDING, SessionState.PAUSED):
             self.controller.stop_recording()
+        self.hotkey_service.stop()
+        for box in list(self.censor_boxes.values()):
+            box.close()
+        self.censor_boxes.clear()
         if self.camera_preview:
             self.camera_preview.close()
         if self.teleprompter_widget:
@@ -378,8 +484,6 @@ class RecordMeApp:
             self.teleprompter_editor.close()
         if self.region_frame:
             self.region_frame.close()
-        if self.censor_overlay:
-            self.censor_overlay.close()
         if self.selector_overlay:
             self.selector_overlay.close()
         self._zoom_timer.stop()
