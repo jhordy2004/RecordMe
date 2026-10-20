@@ -11,6 +11,8 @@ import numpy.typing as npt
 from recordme.camera.camera_source import CameraSource
 from recordme.capture.base import CaptureBackend
 from recordme.compose.camera_layer import CameraLayer
+from recordme.compose.censor_layer import CensorLayer
+from recordme.compose.zoom_layer import ZoomLayer
 from recordme.core.render_state import RenderState
 from recordme.encode.video_writer import VideoWriter
 
@@ -37,6 +39,9 @@ class Compositor:
         self._render_state = initial_render_state
         self._state_lock = threading.Lock()
         self._camera_layer = CameraLayer()
+        self._censor_layer = CensorLayer()
+        self._zoom_layer = ZoomLayer(tau_seconds=0.20)
+        self._last_frame_time: float = time.perf_counter()
 
         self._is_running = False
         self._is_paused = False
@@ -150,7 +155,24 @@ class Compositor:
             )
             composed = resized
 
-        # Superponer capa de cámara si está activada
+        now = time.perf_counter()
+        dt = now - self._last_frame_time
+        self._last_frame_time = now
+
+        # 1. Censura en tiempo real (antes del zoom)
+        if state.censor_regions:
+            composed = self._censor_layer.render(composed, state.censor_regions, state.capture_region)
+
+        # 2. Zoom cinemático continuo con suavizado exponencial
+        composed = self._zoom_layer.render(
+            frame=composed,
+            target_zoom=state.target_zoom,
+            target_cx=state.target_center_x,
+            target_cy=state.target_center_y,
+            dt=dt,
+        )
+
+        # 3. Superponer capa de cámara si está activada (después del zoom)
         if state.camera.enabled and self.camera_source is not None:
             cam_frame = self.camera_source.get_latest_frame()
             if cam_frame is not None:

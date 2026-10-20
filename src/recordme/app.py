@@ -4,8 +4,8 @@ import logging
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QRect, Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QPalette
+from PySide6.QtCore import QRect, Qt, QTimer, QUrl
+from PySide6.QtGui import QColor, QCursor, QDesktopServices, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QMessageBox,
@@ -18,6 +18,7 @@ from recordme.core.recording_controller import RecordingController
 from recordme.core.session import SessionManager
 from recordme.platform_services.factory import get_platform_services
 from recordme.ui.camera_preview import CameraPreviewWidget
+from recordme.ui.censor_overlay import CensorOverlay
 from recordme.ui.countdown import CountdownOverlay
 from recordme.ui.region_frame import RegionFrameWidget
 from recordme.ui.region_selector import RegionSelectorOverlay
@@ -66,7 +67,13 @@ class RecordMeApp:
         self.teleprompter_widget: TeleprompterWidget | None = None
         self.teleprompter_editor: TeleprompterEditorDialog | None = None
         self.countdown_overlay: CountdownOverlay | None = None
+        self.censor_overlay: CensorOverlay | None = None
         self._is_testing_teleprompter = False
+        self._current_zoom: float = 1.0
+
+        self._zoom_timer = QTimer()
+        self._zoom_timer.setInterval(33)  # 30 FPS para seguimiento suave del cursor
+        self._zoom_timer.timeout.connect(self._update_zoom_cursor_position)
 
         self._connect_signals()
         self._position_toolbar()
@@ -81,6 +88,8 @@ class RecordMeApp:
         self.toolbar.mic_toggled.connect(self.controller.set_mic_enabled)
         self.toolbar.camera_toggled.connect(self._on_camera_toggled)
         self.toolbar.teleprompter_clicked.connect(self._open_teleprompter_editor)
+        self.toolbar.zoom_changed.connect(self._on_zoom_changed)
+        self.toolbar.censor_clicked.connect(self._open_censor_overlay)
         self.toolbar.request_exit.connect(self._exit_app)
 
         self.controller.recording_finished.connect(self._on_recording_finished)
@@ -224,6 +233,44 @@ class RecordMeApp:
                 "No se pudo iniciar la grabación. Consulta los registros de log para más detalles.",
             )
 
+    def _on_zoom_changed(self, zoom: float) -> None:
+        """Actualiza el nivel de zoom objetivo y arranca/detiene el seguimiento dinámico del cursor."""
+        self._current_zoom = zoom
+        if zoom > 1.05:
+            self._update_zoom_cursor_position()
+            if not self._zoom_timer.isActive():
+                self._zoom_timer.start()
+        else:
+            self._zoom_timer.stop()
+            self.controller.set_zoom(1.0, 0.5, 0.5)
+
+    def _update_zoom_cursor_position(self) -> None:
+        """Calcula las coordenadas relativas normalizadas del cursor respecto a la región de captura."""
+        if self._current_zoom <= 1.05:
+            return
+
+        cursor_pos = QCursor.pos()
+        screen = QApplication.primaryScreen()
+        dpr = screen.devicePixelRatio() if screen else 1.0
+
+        phys_x = cursor_pos.x() * dpr
+        phys_y = cursor_pos.y() * dpr
+        reg = self.controller.current_region
+
+        # Coordenadas normalizadas [0.0, 1.0] dentro de la región capturada
+        norm_x = (phys_x - reg.x) / max(1, reg.width)
+        norm_y = (phys_y - reg.y) / max(1, reg.height)
+        clamped_x = max(0.0, min(norm_x, 1.0))
+        clamped_y = max(0.0, min(norm_y, 1.0))
+
+        self.controller.set_zoom(self._current_zoom, clamped_x, clamped_y)
+
+    def _open_censor_overlay(self) -> None:
+        """Abre el editor interactivo de censura sobre la pantalla."""
+        self.censor_overlay = CensorOverlay(existing_regions=self.controller._censor_regions)
+        self.censor_overlay.regions_changed.connect(self.controller.set_censor_regions)
+        self.censor_overlay.show()
+
     def _pause_recording(self) -> None:
         """Pausa la grabación y el teleprompter simultáneamente."""
         self.controller.pause_recording()
@@ -331,8 +378,11 @@ class RecordMeApp:
             self.teleprompter_editor.close()
         if self.region_frame:
             self.region_frame.close()
+        if self.censor_overlay:
+            self.censor_overlay.close()
         if self.selector_overlay:
             self.selector_overlay.close()
+        self._zoom_timer.stop()
         self.toolbar.close()
         QApplication.quit()
 

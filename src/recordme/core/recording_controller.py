@@ -18,7 +18,7 @@ from recordme.compose.compositor import Compositor
 from recordme.config.paths import get_temp_dir
 from recordme.config.settings import AppSettings
 from recordme.core.events import SessionState
-from recordme.core.render_state import CameraLayout, RenderState
+from recordme.core.render_state import CameraLayout, CensorRegion, RenderState
 from recordme.core.session import SessionManager
 from recordme.encode.muxer import Muxer
 from recordme.encode.video_writer import VideoWriter
@@ -63,6 +63,11 @@ class RecordingController(QObject):
         self._compositor: Compositor | None = None
         self._muxer = Muxer()
         self._mic_enabled: bool = self.settings.audio.mic_enabled
+
+        self._target_zoom: float = 1.0
+        self._target_zoom_cx: float = 0.5
+        self._target_zoom_cy: float = 0.5
+        self._censor_regions: list[CensorRegion] = []
 
         self._temp_video_file: Path | None = None
         self._temp_audio_file: Path | None = None
@@ -138,6 +143,34 @@ class RecordingController(QObject):
         if self._compositor is not None:
             self._compositor.update_render_state(self._build_render_state())
 
+    def set_zoom(self, zoom: float, center_x: float = 0.5, center_y: float = 0.5) -> None:
+        """Establece el nivel de zoom y su centro normalizado (0.0 a 1.0)."""
+        self._target_zoom = max(1.0, min(zoom, 5.0))
+        self._target_zoom_cx = max(0.0, min(center_x, 1.0))
+        self._target_zoom_cy = max(0.0, min(center_y, 1.0))
+        if self._compositor is not None:
+            self._compositor.update_render_state(self._build_render_state())
+        logger.debug("Zoom actualizado: %.2fx en (%.2f, %.2f)", self._target_zoom, self._target_zoom_cx, self._target_zoom_cy)
+
+    def set_censor_regions(self, regions: list[CensorRegion]) -> None:
+        """Actualiza las regiones de censura activas."""
+        self._censor_regions = list(regions)
+        if self._compositor is not None:
+            self._compositor.update_render_state(self._build_render_state())
+        logger.info("Regiones de censura actualizadas: %d regiones activas.", len(self._censor_regions))
+
+    def add_censor_region(self, region: CensorRegion) -> None:
+        """Agrega una nueva región de censura."""
+        self._censor_regions.append(region)
+        if self._compositor is not None:
+            self._compositor.update_render_state(self._build_render_state())
+
+    def clear_censor_regions(self) -> None:
+        """Elimina todas las regiones de censura."""
+        self._censor_regions.clear()
+        if self._compositor is not None:
+            self._compositor.update_render_state(self._build_render_state())
+
     def _build_render_state(self) -> RenderState:
         """Construye un snapshot de RenderState inmutable para el Compositor."""
         return RenderState(
@@ -145,6 +178,10 @@ class RecordingController(QObject):
             output_width=self.current_region.width,
             output_height=self.current_region.height,
             camera=self._camera_layout,
+            target_zoom=self._target_zoom,
+            target_center_x=self._target_zoom_cx,
+            target_center_y=self._target_zoom_cy,
+            censor_regions=tuple(self._censor_regions),
         )
 
     def set_region(self, region: Rect) -> None:
