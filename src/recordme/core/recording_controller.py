@@ -11,6 +11,8 @@ from PySide6.QtCore import QObject, Signal
 from recordme.audio.mic_recorder import MicRecorder
 from recordme.capture.base import CaptureBackend
 from recordme.capture.factory import create_capture_backend
+from recordme.capture.mss_fallback import MSSCaptureBackend
+from recordme.capture.qt_fallback import QtScreenCaptureBackend
 from recordme.compose.compositor import Compositor
 from recordme.config.paths import get_temp_dir
 from recordme.config.settings import AppSettings
@@ -19,7 +21,7 @@ from recordme.core.render_state import RenderState
 from recordme.core.session import SessionManager
 from recordme.encode.muxer import Muxer
 from recordme.encode.video_writer import VideoWriter
-from recordme.utils.geometry import Rect
+from recordme.utils.geometry import Rect, get_primary_screen_physical_rect
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ class RecordingController(QObject):
         self.session_manager = session_manager
         self.settings = settings
 
-        self.current_region: Rect = Rect(0, 0, 1920, 1080)
+        self.current_region: Rect = get_primary_screen_physical_rect()
         self._capture_backend: CaptureBackend | None = None
         self._video_writer: VideoWriter | None = None
         self._mic_recorder: MicRecorder | None = None
@@ -76,14 +78,28 @@ class RecordingController(QObject):
             dest_folder.mkdir(parents=True, exist_ok=True)
             self._output_file = dest_folder / filename
 
-            # 1. Iniciar backend de captura
-            self._capture_backend = create_capture_backend()
+            # 1. Iniciar backend de captura con fallback automático
             fps = self.settings.output.fps
-            if not self._capture_backend.start(self.current_region, fps=fps):
-                raise RuntimeError("No se pudo iniciar el backend de captura de pantalla.")
+            backends_to_try = [
+                create_capture_backend(),
+                MSSCaptureBackend(),
+                QtScreenCaptureBackend(),
+            ]
+            self._capture_backend = None
+            for backend in backends_to_try:
+                try:
+                    if backend.start(self.current_region, fps=fps):
+                        self._capture_backend = backend
+                        logger.info("Backend de captura seleccionado exitosamente: %s", type(backend).__name__)
+                        break
+                except Exception as ex:
+                    logger.warning("Fallo al iniciar backend %s: %s", type(backend).__name__, ex)
+
+            if self._capture_backend is None:
+                raise RuntimeError("No se pudo iniciar ningún backend de captura de pantalla.")
 
             # Esperar un instante para que el backend entregue al menos un frame inicial
-            time.sleep(0.05)
+            time.sleep(0.08)
 
             # 2. Iniciar escritor de video
             self._video_writer = VideoWriter(

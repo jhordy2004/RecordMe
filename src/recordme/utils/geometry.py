@@ -44,3 +44,19 @@ def to_logical_pixels(physical_value: int | float, dpr: float) -> int:
 def make_even(value: int) -> int:
     """Asegura que un valor entero sea par truncando el último bit impar si es necesario."""
     return value if value % 2 == 0 else value - 1
+
+
+def get_primary_screen_physical_rect() -> Rect:
+    """Obtiene la resolución física real del monitor primario de forma segura."""
+    from PySide6.QtGui import QGuiApplication
+    screen = QGuiApplication.primaryScreen()
+    if screen:
+        geom = screen.geometry()
+        dpr = screen.devicePixelRatio()
+        return Rect(
+            x=to_physical_pixels(geom.x(), dpr),
+            y=to_physical_pixels(geom.y(), dpr),
+            width=to_physical_pixels(geom.width(), dpr),
+            height=to_physical_pixels(geom.height(), dpr),
+        ).to_even()
+    return Rect(0, 0, 1920, 1080)

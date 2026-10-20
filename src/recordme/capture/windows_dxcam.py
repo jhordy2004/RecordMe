@@ -29,18 +29,6 @@ class WindowsDXCamBackend(CaptureBackend):
     def start(self, region: Rect, fps: int = 30) -> bool:
         """Inicia la captura con dxcam en modo de captura continua."""
         try:
-            self._region = region.to_even()
-            logger.info("Inicializando dxcam en pantalla %d, región: %s, fps: %d", self.output_idx, self._region, fps)
-
-            # dxcam espera región como (left, top, right, bottom)
-            # Si es pantalla completa o región específica
-            dxcam_region = (
-                self._region.x,
-                self._region.y,
-                self._region.x + self._region.width,
-                self._region.y + self._region.height,
-            )
-
             self._camera = dxcam.create(
                 device_idx=self.device_idx,
                 output_idx=self.output_idx,
@@ -49,6 +37,23 @@ class WindowsDXCamBackend(CaptureBackend):
             if self._camera is None:
                 logger.error("dxcam.create devolvió None.")
                 return False
+
+            cam_w = getattr(self._camera, "width", 1920)
+            cam_h = getattr(self._camera, "height", 1080)
+
+            # Clampear la región a los límites físicos del monitor
+            reg = region.to_even()
+            left = max(0, min(reg.x, cam_w - 2))
+            top = max(0, min(reg.y, cam_h - 2))
+            right = max(left + 2, min(reg.x + reg.width, cam_w))
+            bottom = max(top + 2, min(reg.y + reg.height, cam_h))
+            self._region = Rect(x=left, y=top, width=right - left, height=bottom - top).to_even()
+
+            logger.info("Inicializando dxcam en pantalla %d, región: %s (pantalla: %dx%d), fps: %d", self.output_idx, self._region, cam_w, cam_h, fps)
+
+            # Si abarca toda la pantalla física, dxcam prefiere region=None
+            is_full_screen = (self._region.x == 0 and self._region.y == 0 and self._region.width >= cam_w and self._region.height >= cam_h)
+            dxcam_region = None if is_full_screen else (self._region.x, self._region.y, self._region.x + self._region.width, self._region.y + self._region.height)
 
             self._camera.start(
                 target_fps=fps,

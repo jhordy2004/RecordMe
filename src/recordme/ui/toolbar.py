@@ -1,10 +1,9 @@
 """Barra de controles flotante compacta (modo configuración y modo grabación)."""
 
 import logging
-from typing import Any
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QShowEvent
+from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPaintEvent, QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -16,7 +15,7 @@ from recordme.constants import APP_NAME
 from recordme.core.events import SessionState
 from recordme.core.session import SessionManager
 from recordme.platform_services.factory import get_platform_services
-from recordme.utils.geometry import Rect
+from recordme.utils.geometry import Rect, get_primary_screen_physical_rect
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +38,7 @@ class FloatingToolbar(QWidget):
         self._drag_start_pos: QPoint | None = None
         self._elapsed_seconds = 0
         self._mic_enabled = True
-        self._selected_region: Rect = Rect(0, 0, 1920, 1080)
+        self._selected_region: Rect = get_primary_screen_physical_rect()
 
         # Configuración visual flotante
         self.setWindowFlags(
@@ -72,7 +71,7 @@ class FloatingToolbar(QWidget):
         self.layout_main.addWidget(self.app_title)
 
         # Etiqueta de área seleccionada
-        self.area_label = QLabel("1920×1080")
+        self.area_label = QLabel(f"{self._selected_region.width}×{self._selected_region.height}")
         self.area_label.setStyleSheet("color: #00B4D8; font-size: 11px;")
         self.layout_main.addWidget(self.area_label)
 
@@ -133,7 +132,7 @@ class FloatingToolbar(QWidget):
             }}
         """
 
-    def paintEvent(self, event: Any) -> None:  # noqa: N802
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
         """Pinta el fondo redondeado translúcido de la barra."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
