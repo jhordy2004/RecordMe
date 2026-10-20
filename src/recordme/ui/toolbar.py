@@ -271,12 +271,16 @@ class FloatingToolbar(QWidget):
         elif new_state == SessionState.PAUSED:
             self.btn_pause.setText("Reanudar")
             self._timer.stop()
+        elif new_state == SessionState.COUNTDOWN:
+            self.btn_record.setText("3...")
+            self.btn_record.setEnabled(False)
         elif new_state in (SessionState.IDLE, SessionState.DONE, SessionState.ERROR):
             self._timer.stop()
             self.btn_area.setVisible(True)
             self.timer_label.setVisible(False)
             self.btn_pause.setVisible(False)
             self.btn_record.setText("Grabar")
+            self.btn_record.setEnabled(True)
             self.btn_record.setStyleSheet(self._button_style("#E50914", "#FF1E27"))
         elif new_state == SessionState.FINALIZING:
             self.btn_record.setText("Guardando...")

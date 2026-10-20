@@ -4,7 +4,7 @@ import logging
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QRect, Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -18,12 +18,13 @@ from recordme.core.recording_controller import RecordingController
 from recordme.core.session import SessionManager
 from recordme.platform_services.factory import get_platform_services
 from recordme.ui.camera_preview import CameraPreviewWidget
+from recordme.ui.countdown import CountdownOverlay
 from recordme.ui.region_frame import RegionFrameWidget
 from recordme.ui.region_selector import RegionSelectorOverlay
 from recordme.ui.teleprompter import TeleprompterWidget
 from recordme.ui.teleprompter_editor import TeleprompterEditorDialog
 from recordme.ui.toolbar import FloatingToolbar
-from recordme.utils.geometry import Rect, get_primary_screen_physical_rect
+from recordme.utils.geometry import Rect, get_primary_screen_physical_rect, to_logical_pixels
 from recordme.utils.logging_setup import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ class RecordMeApp:
         self.camera_preview: CameraPreviewWidget | None = None
         self.teleprompter_widget: TeleprompterWidget | None = None
         self.teleprompter_editor: TeleprompterEditorDialog | None = None
+        self.countdown_overlay: CountdownOverlay | None = None
         self._is_testing_teleprompter = False
 
         self._connect_signals()
@@ -72,7 +74,7 @@ class RecordMeApp:
     def _connect_signals(self) -> None:
         """Conecta las señales entre la barra flotante y el controlador de grabación."""
         self.toolbar.request_region_selection.connect(self._open_region_selector)
-        self.toolbar.request_start_record.connect(self._start_recording)
+        self.toolbar.request_start_record.connect(self._initiate_recording)
         self.toolbar.request_pause_record.connect(self._pause_recording)
         self.toolbar.request_resume_record.connect(self._resume_recording)
         self.toolbar.request_stop_record.connect(self._stop_recording)
@@ -166,6 +168,46 @@ class RecordMeApp:
         """Restaura la región de grabación a la pantalla completa."""
         screen_rect = get_primary_screen_physical_rect()
         self._on_region_selected(screen_rect)
+
+    def _initiate_recording(self) -> None:
+        """Inicia la cuenta regresiva antes de comenzar la grabación."""
+        if self.session_manager.state not in (SessionState.IDLE, SessionState.CONFIGURING, SessionState.DONE):
+            return
+
+        screen = QApplication.primaryScreen()
+        dpr = screen.devicePixelRatio() if screen else 1.0
+
+        # Si el área es pantalla completa o región personalizada
+        screen_phys = get_primary_screen_physical_rect()
+        is_fullscreen = (
+            self.controller.current_region.width >= screen_phys.width
+            and self.controller.current_region.height >= screen_phys.height
+        )
+
+        if is_fullscreen:
+            target_rect = screen.geometry() if screen else None
+        else:
+            log_x = to_logical_pixels(self.controller.current_region.x, dpr)
+            log_y = to_logical_pixels(self.controller.current_region.y, dpr)
+            log_w = to_logical_pixels(self.controller.current_region.width, dpr)
+            log_h = to_logical_pixels(self.controller.current_region.height, dpr)
+            target_rect = QRect(log_x, log_y, log_w, log_h)
+
+        self.session_manager.transition_to(SessionState.COUNTDOWN)
+        self.countdown_overlay = CountdownOverlay(target_rect=target_rect, seconds=3)
+        self.countdown_overlay.finished.connect(self._on_countdown_finished)
+        self.countdown_overlay.canceled.connect(self._on_countdown_canceled)
+        self.countdown_overlay.start()
+
+    def _on_countdown_finished(self) -> None:
+        """Comienza la grabación efectiva tras concluir la cuenta atrás."""
+        self.countdown_overlay = None
+        self._start_recording()
+
+    def _on_countdown_canceled(self) -> None:
+        """Cancela la cuenta regresiva y regresa a IDLE."""
+        self.countdown_overlay = None
+        self.session_manager.transition_to(SessionState.IDLE)
 
     def _start_recording(self) -> None:
         """Inicia el proceso de grabación y arranca el scroll del teleprompter si está activo."""
