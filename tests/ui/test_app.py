@@ -1,24 +1,67 @@
-"""Pruebas de interfaz para la ventana de bienvenida."""
+"""Pruebas de interfaz para la barra flotante y la aplicación."""
 
-from PySide6.QtCore import Qt
 from pytestqt.qtbot import QtBot
 
-from recordme.app import WelcomeWindow
+from recordme.app import RecordMeApp
 from recordme.config.settings import AppSettings
+from recordme.core.events import SessionState
 from recordme.core.session import SessionManager
+from recordme.ui.toolbar import FloatingToolbar
+from recordme.utils.geometry import Rect
 
 
-def test_welcome_window_creation(qtbot: QtBot) -> None:
-    """Verifica la creación y visualización de la ventana de bienvenida."""
+def test_floating_toolbar_initial_state(qtbot: QtBot) -> None:
+    """Verifica que la barra flotante inicie con los botones correctos."""
+    session_manager = SessionManager()
+    toolbar = FloatingToolbar(session_manager)
+    qtbot.addWidget(toolbar)
+    toolbar.show()
+
+    assert toolbar.isVisible()
+    assert toolbar.btn_record.text() == "Grabar"
+    assert toolbar.btn_area.isVisible() is True
+    assert toolbar.btn_pause.isVisible() is False
+    assert toolbar.timer_label.isVisible() is False
+
+    # Probar actualización de región
+    toolbar.update_selected_region(Rect(0, 0, 1280, 720))
+    assert toolbar.area_label.text() == "1280×720"
+
+
+def test_toolbar_state_changes(qtbot: QtBot) -> None:
+    """Verifica la adaptación de la barra cuando cambia el estado de la sesión."""
+    session_manager = SessionManager()
+    toolbar = FloatingToolbar(session_manager)
+    qtbot.addWidget(toolbar)
+    toolbar.show()
+
+    # Transición a RECORDING
+    session_manager.transition_to(SessionState.CONFIGURING)
+    session_manager.transition_to(SessionState.COUNTDOWN)
+    session_manager.transition_to(SessionState.RECORDING)
+
+    assert toolbar.btn_record.text() == "Detener"
+    assert toolbar.btn_pause.isVisible() is True
+    assert toolbar.btn_pause.text() == "Pausar"
+    assert toolbar.timer_label.isVisible() is True
+    assert toolbar.btn_area.isVisible() is False
+
+    # Transición a PAUSED
+    session_manager.transition_to(SessionState.PAUSED)
+    assert toolbar.btn_pause.text() == "Reanudar"
+
+    # Transición a FINALIZING
+    session_manager.transition_to(SessionState.FINALIZING)
+    assert toolbar.btn_record.text() == "Guardando..."
+
+
+def test_recordme_app_instantiation(qtbot: QtBot) -> None:
+    """Verifica la inicialización del coordinador RecordMeApp."""
     session_manager = SessionManager()
     settings = AppSettings()
-    window = WelcomeWindow(session_manager, settings)
-    qtbot.addWidget(window)
-    window.show()
+    app = RecordMeApp(session_manager, settings)
+    qtbot.addWidget(app.toolbar)
+    app.show()
 
-    assert window.isVisible()
-    assert "RecordMe" in window.windowTitle()
-
-    # Probar clic en Comprobar Servicios
-    qtbot.mouseClick(window.status_btn, Qt.MouseButton.LeftButton)  # type: ignore[no-untyped-call]
-    assert "Exclusión captura:" in window.status_btn.text()
+    assert app.toolbar.isVisible()
+    assert app.controller is not None
