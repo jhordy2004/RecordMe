@@ -1,5 +1,47 @@
 # Registro de Cambios (CHANGELOG)
 
+## [Fase 3: Teleprompter Invisible y Editor] - 2026-10-20
+
+### Agregado
+- **Panel Flotante de Teleprompter (`TeleprompterWidget`)**:
+  - Panel angosto (60% de pantalla por defecto) de 1 a 3 líneas visibles sin ocupar toda la pantalla.
+  - Fondo oscuro translúcido con desenfoque nativo (Acrylic/Mica) y letra blanca de alto contraste con resaltado de la línea central.
+  - **Scroll Continuo Subpíxel**: Avance fluido gobernado por `time.perf_counter()` y WPM exacto (dentro del ±3% de tolerancia probado mediante `test_teleprompter_wpm_timing_calculation`).
+  - Word-wrap automático de párrafos calculado mediante `QFontMetrics`.
+  - **100% Invisible en el Video**: Excluido de la grabación mediante `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`.
+  - Sincronización automática de avance/pausa al iniciar, pausar o reanudar la grabación.
+  - Ajuste manual interactivo con rueda del ratón y libre reposicionamiento arrastrando por la pantalla.
+- **Editor Completo de Guiones (`TeleprompterEditorDialog`)**:
+  - Área de edición amplia para redactar o pegar guiones completos.
+  - Botones para abrir y guardar archivos `.txt` en la carpeta de guiones del usuario.
+  - Contador en tiempo real de palabras y estimación de duración en minutos y segundos según la velocidad configurada.
+  - Deslizadores y controles numéricos para velocidad WPM (40–300), tamaño de fuente (18–64 px), líneas visibles (1–3) y porcentaje de opacidad del fondo.
+  - Botón **Probar Teleprompter** para calibrar la velocidad en vivo antes de iniciar la sesión de grabación.
+- **Control Integrado en Barra**:
+  - Botón **Teleprompter** en la barra flotante para acceder inmediatamente al editor y activar el prompter.
+- **Pruebas Automatizadas**:
+  - `tests/unit/test_teleprompter_math.py`: verificación de precisión de avance temporal y tolerancia WPM.
+  - `tests/ui/test_teleprompter.py`: ciclo de vida del widget, scroll, pausa/reanudación y editor de texto.
+
+---
+
+### Comando para probar manualmente la Fase 3
+```powershell
+.\.venv\Scripts\python -m recordme
+```
+1. En la barra flotante, pulsa el botón **Teleprompter**.
+2. Se abrirá el **Editor de Teleprompter**:
+   - Pega tu guion o escribe unas frases.
+   - Observa cómo se calcula el número de palabras y el tiempo estimado en minutos/segundos.
+   - Ajusta los deslizadores de velocidad (WPM), tamaño de letra y líneas visibles.
+3. Haz clic en **Probar Teleprompter**: aparecerá el teleprompter flotante arriba en el centro avanzando suavemente.
+4. Puedes arrastrar el teleprompter con el ratón para colocarlo cerca de tu cámara web.
+5. Usa la rueda del ratón sobre el teleprompter para retroceder o adelantar el texto si lo necesitas.
+6. Pulsa **Grabar**: el teleprompter avanzará al ritmo de tus palabras por minuto mientras hablas a la cámara.
+7. Al pulsar **Detener**, revisa el video grabado y verifica que el teleprompter **no aparece jamás** en el video final.
+
+---
+
 ## [Fase 2: Cámara y Burbuja en Tiempo Real] - 2026-10-20
 
 ### Agregado
@@ -21,23 +63,6 @@
   - Cálculo y emisión en tiempo real de su posición normalizada relativa a la región grabada.
 - **Control en Barra Flotante**:
   - Botón **Cámara: On / Off** interactivo en la barra de herramientas para activar o desactivar la cámara en reposo o en plena grabación.
-- **Pruebas Automatizadas**:
-  - `tests/unit/test_camera_layer.py`: pruebas de renderizado de máscaras, superposición de colores y formas.
-  - `tests/ui/test_camera_preview.py`: pruebas de interacción, recepción de frames y señales de layout.
-
----
-
-### Comando para probar manualmente la Fase 2
-```powershell
-.\.venv\Scripts\python -m recordme
-```
-1. Verás aparecer el botón **Cámara: Off** en la barra de herramientas.
-2. Haz clic en **Cámara**: se activará pasando a **Cámara: On** y aparecerá la burbuja flotante con tu imagen.
-3. Arrastra la burbuja con el ratón para ubicarla en cualquier esquina de tu pantalla.
-4. Gira la rueda del ratón sobre la burbuja para agrandarla o achicarla en vivo.
-5. Pulsa **Grabar**: la burbuja de la cámara se grabará perfectamente en la posición elegida sin que se vea la ventana de la barra ni la ventana de preview nativa duplicada.
-6. Mientras grabas, mueve la burbuja a otra posición o desactiva la cámara con el botón de la barra.
-7. Pulsa **Detener**: reproduce el video MP4 resultante y comprueba que la cámara se grabó en sincronía, con su forma circular y borde nítido.
 
 ---
 
@@ -71,10 +96,6 @@
 - **Barra de Controles Flotante (`FloatingToolbar`)**:
   - Interfaz compacta con estados: Grabar, Pausar/Reanudar, Detener, Selector de Área y Contador `mm:ss`.
   - Arrastrable y con exclusión de captura activa.
-- **Pruebas Automatizadas**:
-  - `test_magenta_exclusion.py`: comprobación de no intrusión de ventanas excluidas.
-  - `test_synthetic_recording.py`: generación de video sintético y audio senoidal 440 Hz a MP4.
-  - `test_recording_controller.py`: ciclo de vida completo de grabación con pausa y reanudación.
 
 ---
 

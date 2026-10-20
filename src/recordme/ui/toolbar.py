@@ -30,6 +30,7 @@ class FloatingToolbar(QWidget):
     request_stop_record = Signal()
     mic_toggled = Signal(bool)
     camera_toggled = Signal(bool)
+    teleprompter_clicked = Signal()
 
     def __init__(self, session_manager: SessionManager, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -94,6 +95,12 @@ class FloatingToolbar(QWidget):
         self.btn_cam.setStyleSheet(self._button_style("#333333", "#444444"))
         self.btn_cam.clicked.connect(self._toggle_camera)
         self.layout_main.addWidget(self.btn_cam)
+
+        # Botón Teleprompter
+        self.btn_teleprompter = QPushButton("Teleprompter")
+        self.btn_teleprompter.setStyleSheet(self._button_style("#333333", "#444444"))
+        self.btn_teleprompter.clicked.connect(self.teleprompter_clicked.emit)
+        self.layout_main.addWidget(self.btn_teleprompter)
 
         # Temporizador (visible durante grabación)
         self.timer_label = QLabel("00:00")

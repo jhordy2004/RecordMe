@@ -11,13 +11,15 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from recordme.config.settings import AppSettings
+from recordme.config.settings import AppSettings, TeleprompterSettings
 from recordme.constants import APP_DISPLAY_NAME, APP_NAME, APP_VERSION
 from recordme.core.recording_controller import RecordingController
 from recordme.core.session import SessionManager
 from recordme.platform_services.factory import get_platform_services
 from recordme.ui.camera_preview import CameraPreviewWidget
 from recordme.ui.region_selector import RegionSelectorOverlay
+from recordme.ui.teleprompter import TeleprompterWidget
+from recordme.ui.teleprompter_editor import TeleprompterEditorDialog
 from recordme.ui.toolbar import FloatingToolbar
 from recordme.utils.geometry import Rect
 from recordme.utils.logging_setup import setup_logging
@@ -57,6 +59,7 @@ class RecordMeApp:
         self.toolbar = FloatingToolbar(session_manager)
         self.selector_overlay: RegionSelectorOverlay | None = None
         self.camera_preview: CameraPreviewWidget | None = None
+        self.teleprompter_widget: TeleprompterWidget | None = None
 
         self._connect_signals()
         self._position_toolbar()
@@ -65,11 +68,12 @@ class RecordMeApp:
         """Conecta las señales entre la barra flotante y el controlador de grabación."""
         self.toolbar.request_region_selection.connect(self._open_region_selector)
         self.toolbar.request_start_record.connect(self._start_recording)
-        self.toolbar.request_pause_record.connect(self.controller.pause_recording)
-        self.toolbar.request_resume_record.connect(self.controller.resume_recording)
-        self.toolbar.request_stop_record.connect(self.controller.stop_recording)
+        self.toolbar.request_pause_record.connect(self._pause_recording)
+        self.toolbar.request_resume_record.connect(self._resume_recording)
+        self.toolbar.request_stop_record.connect(self._stop_recording)
         self.toolbar.mic_toggled.connect(self.controller.set_mic_muted)
         self.toolbar.camera_toggled.connect(self._on_camera_toggled)
+        self.toolbar.teleprompter_clicked.connect(self._open_teleprompter_editor)
 
         self.controller.recording_finished.connect(self._on_recording_finished)
         self.controller.recording_failed.connect(self._on_recording_failed)
@@ -126,14 +130,72 @@ class RecordMeApp:
             self.selector_overlay = None
 
     def _start_recording(self) -> None:
-        """Inicia el proceso de grabación."""
+        """Inicia el proceso de grabación y arranca el scroll del teleprompter si está activo."""
         success = self.controller.start_recording()
-        if not success:
+        if success:
+            if self.teleprompter_widget and self.teleprompter_widget.isVisible():
+                self.teleprompter_widget.start_scrolling()
+        else:
             QMessageBox.critical(
                 self.toolbar,
                 APP_NAME,
                 "No se pudo iniciar la grabación. Consulta los registros de log para más detalles.",
             )
+
+    def _pause_recording(self) -> None:
+        """Pausa la grabación y el teleprompter simultáneamente."""
+        self.controller.pause_recording()
+        if self.teleprompter_widget:
+            self.teleprompter_widget.pause_scrolling()
+
+    def _resume_recording(self) -> None:
+        """Reanuda la grabación y el teleprompter simultáneamente."""
+        self.controller.resume_recording()
+        if self.teleprompter_widget:
+            self.teleprompter_widget.resume_scrolling()
+
+    def _stop_recording(self) -> None:
+        """Detiene la grabación y pausa el teleprompter."""
+        self.controller.stop_recording()
+        if self.teleprompter_widget:
+            self.teleprompter_widget.pause_scrolling()
+
+    def _open_teleprompter_editor(self) -> None:
+        """Abre el editor completo del teleprompter."""
+        editor = TeleprompterEditorDialog(
+            current_text=self.settings.teleprompter.last_script,
+            settings=self.settings.teleprompter,
+            parent=self.toolbar,
+        )
+        editor.settings_applied.connect(self._on_teleprompter_applied)
+        editor.test_requested.connect(self._on_teleprompter_test)
+        editor.exec()
+
+    def _on_teleprompter_applied(self, text: str, settings: TeleprompterSettings) -> None:
+        """Aplica el texto y ajustes al widget flotante del teleprompter y guarda configuración."""
+        self.settings.teleprompter = settings
+        self.settings.save()
+
+        if self.teleprompter_widget is None:
+            self.teleprompter_widget = TeleprompterWidget(text=text, settings=settings)
+        else:
+            self.teleprompter_widget.update_settings(settings)
+            self.teleprompter_widget.set_script(text)
+
+        self.teleprompter_widget.show()
+        logger.info("Teleprompter visible y listo.")
+
+    def _on_teleprompter_test(self, text: str, settings: TeleprompterSettings) -> None:
+        """Lanza una prueba en vivo del teleprompter con auto-scroll para calibrar."""
+        if self.teleprompter_widget is None:
+            self.teleprompter_widget = TeleprompterWidget(text=text, settings=settings)
+        else:
+            self.teleprompter_widget.update_settings(settings)
+            self.teleprompter_widget.set_script(text)
+
+        self.teleprompter_widget.show()
+        self.teleprompter_widget.reset_scroll()
+        self.teleprompter_widget.start_scrolling()
 
     def _on_recording_finished(self, output_path: Path) -> None:
         """Muestra aviso al finalizar con opción para abrir la carpeta contenedora."""
