@@ -7,7 +7,9 @@ import time
 import numpy as np
 import numpy.typing as npt
 
+from recordme.camera.camera_source import CameraSource
 from recordme.capture.base import CaptureBackend
+from recordme.compose.camera_layer import CameraLayer
 from recordme.core.render_state import RenderState
 from recordme.encode.video_writer import VideoWriter
 
@@ -22,15 +24,18 @@ class Compositor:
         capture_backend: CaptureBackend,
         video_writer: VideoWriter,
         initial_render_state: RenderState,
+        camera_source: CameraSource | None = None,
         fps: int = 30,
     ) -> None:
         self.capture_backend = capture_backend
         self.video_writer = video_writer
+        self.camera_source = camera_source
         self._fps = fps
         self._frame_interval = 1.0 / max(1, fps)
 
         self._render_state = initial_render_state
         self._state_lock = threading.Lock()
+        self._camera_layer = CameraLayer()
 
         self._is_running = False
         self._is_paused = False
@@ -140,6 +145,13 @@ class Compositor:
             composed = raw_frame[crop_y : crop_y + crop_h, crop_x : crop_x + crop_w]
         else:
             composed = raw_frame
+
+        # Superponer capa de cámara si está activada
+        if state.camera.enabled and self.camera_source is not None:
+            cam_frame = self.camera_source.get_latest_frame()
+            if cam_frame is not None:
+                composed = composed.copy()
+                composed = self._camera_layer.render(composed, cam_frame, state.camera)
 
         self._last_valid_frame = composed
         return composed

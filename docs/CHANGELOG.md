@@ -1,5 +1,46 @@
 # Registro de Cambios (CHANGELOG)
 
+## [Fase 2: Cámara y Burbuja en Tiempo Real] - 2026-10-20
+
+### Agregado
+- **Fuente de Cámara Multihilo (`CameraSource`)**:
+  - Hilo de captura dedicado mediante OpenCV `VideoCapture` (backend preferente `CAP_DSHOW` en Windows).
+  - Modo espejo horizontal (`mirror=True`) con `cv2.flip`.
+  - Resiliencia ante desconexión o fallos temporales sin detener la grabación de pantalla.
+  - Entrega atómica del último frame BGR al compositor y sistema de callbacks para la vista previa de la UI.
+- **Capa de Composición de Cámara (`CameraLayer`)**:
+  - Máscaras antialiased por supersampling 2x para formas circulares, rectángulos redondeados y rectángulos estándar.
+  - Recorte "cover" centrado automático que llena la forma sin deformar la relación de aspecto del sensor.
+  - Bordes de color personalizables y dibujo opcional del nombre del usuario en píldora translúcida con mezcla alfa.
+  - Posicionamiento normalizado (0.0 a 1.0) respecto al área de salida final.
+- **Ventana Flotante de Previsualización (`CameraPreviewWidget`)**:
+  - Ventana flotante sin bordes, siempre visible (`FramelessWindowHint | WindowStaysOnTopHint | Tool`).
+  - **Excluida de la captura de video** (`SetWindowDisplayAffinity`), garantizando que la ventana nativa de preview no aparezca duplicada en la grabación.
+  - Totalmente arrastrable por el usuario con el ratón sobre cualquier monitor.
+  - Redimensionable en vivo con la rueda del ratón (`wheelEvent`), actualizando el porcentaje de tamaño (10% a 45%).
+  - Cálculo y emisión en tiempo real de su posición normalizada relativa a la región grabada.
+- **Control en Barra Flotante**:
+  - Botón **Cámara: On / Off** interactivo en la barra de herramientas para activar o desactivar la cámara en reposo o en plena grabación.
+- **Pruebas Automatizadas**:
+  - `tests/unit/test_camera_layer.py`: pruebas de renderizado de máscaras, superposición de colores y formas.
+  - `tests/ui/test_camera_preview.py`: pruebas de interacción, recepción de frames y señales de layout.
+
+---
+
+### Comando para probar manualmente la Fase 2
+```powershell
+.\.venv\Scripts\python -m recordme
+```
+1. Verás aparecer el botón **Cámara: Off** en la barra de herramientas.
+2. Haz clic en **Cámara**: se activará pasando a **Cámara: On** y aparecerá la burbuja flotante con tu imagen.
+3. Arrastra la burbuja con el ratón para ubicarla en cualquier esquina de tu pantalla.
+4. Gira la rueda del ratón sobre la burbuja para agrandarla o achicarla en vivo.
+5. Pulsa **Grabar**: la burbuja de la cámara se grabará perfectamente en la posición elegida sin que se vea la ventana de la barra ni la ventana de preview nativa duplicada.
+6. Mientras grabas, mueve la burbuja a otra posición o desactiva la cámara con el botón de la barra.
+7. Pulsa **Detener**: reproduce el video MP4 resultante y comprueba que la cámara se grabó en sincronía, con su forma circular y borde nítido.
+
+---
+
 ## [Fase 1: Núcleo de Grabación en Windows] - 2026-10-20
 
 ### Agregado
@@ -37,19 +78,6 @@
 
 ---
 
-### Comando para probar manualmente la Fase 1
-```powershell
-.\.venv\Scripts\python -m recordme
-```
-1. Se abrirá la barra flotante arriba en el centro.
-2. Pulsa en **Área** para dibujar un rectángulo de pantalla (o presiona Enter para pantalla completa).
-3. Pulsa en **Grabar**: la barra cambiará al modo compacto con temporizador en rojo.
-4. Mueve ventanas o navega por el área; la barra flotante no aparecerá en el video grabado.
-5. Pulsa **Pausar** y luego **Reanudar**.
-6. Pulsa **Detener**: se generará el archivo MP4 en `Videos/RecordMe` y se abrirá el cuadro de diálogo con el botón para **Abrir carpeta**.
-
----
-
 ## [Fase 0: Cimientos] - 2026-10-20
 
 ### Agregado
@@ -62,4 +90,3 @@
 - Implementación Win32 de Per-Monitor DPI Awareness y exclusión de ventanas de captura (`SetWindowDisplayAffinity`).
 - Interfaz Qt inicial con tema oscuro uniforme y ventana de verificación (`app.py`).
 - Suite de pruebas unitarias para configuración, geometría y máquina de estados.
-

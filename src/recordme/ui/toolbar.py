@@ -29,6 +29,7 @@ class FloatingToolbar(QWidget):
     request_resume_record = Signal()
     request_stop_record = Signal()
     mic_toggled = Signal(bool)
+    camera_toggled = Signal(bool)
 
     def __init__(self, session_manager: SessionManager, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -38,6 +39,7 @@ class FloatingToolbar(QWidget):
         self._drag_start_pos: QPoint | None = None
         self._elapsed_seconds = 0
         self._mic_enabled = True
+        self._cam_enabled = False
         self._selected_region: Rect = get_primary_screen_physical_rect()
 
         # Configuración visual flotante
@@ -86,6 +88,12 @@ class FloatingToolbar(QWidget):
         self.btn_mic.setStyleSheet(self._button_style("#333333", "#444444"))
         self.btn_mic.clicked.connect(self._toggle_mic)
         self.layout_main.addWidget(self.btn_mic)
+
+        # Botón Cámara
+        self.btn_cam = QPushButton("Cámara: Off")
+        self.btn_cam.setStyleSheet(self._button_style("#333333", "#444444"))
+        self.btn_cam.clicked.connect(self._toggle_camera)
+        self.layout_main.addWidget(self.btn_cam)
 
         # Temporizador (visible durante grabación)
         self.timer_label = QLabel("00:00")
@@ -178,6 +186,21 @@ class FloatingToolbar(QWidget):
             else self._button_style("#721C24", "#F8D7DA")
         )
         self.mic_toggled.emit(self._mic_enabled)
+
+    def _toggle_camera(self) -> None:
+        """Alterna el estado de la cámara."""
+        self.set_camera_enabled(not self._cam_enabled)
+        self.camera_toggled.emit(self._cam_enabled)
+
+    def set_camera_enabled(self, enabled: bool) -> None:
+        """Actualiza el botón y estado de la cámara."""
+        self._cam_enabled = enabled
+        self.btn_cam.setText("Cámara: On" if self._cam_enabled else "Cámara: Off")
+        self.btn_cam.setStyleSheet(
+            self._button_style("#007ACC", "#0098FF")
+            if self._cam_enabled
+            else self._button_style("#333333", "#444444")
+        )
 
     def _on_record_clicked(self) -> None:
         """Maneja el clic del botón principal (Grabar o Detener)."""

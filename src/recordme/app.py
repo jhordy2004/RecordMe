@@ -16,6 +16,7 @@ from recordme.constants import APP_DISPLAY_NAME, APP_NAME, APP_VERSION
 from recordme.core.recording_controller import RecordingController
 from recordme.core.session import SessionManager
 from recordme.platform_services.factory import get_platform_services
+from recordme.ui.camera_preview import CameraPreviewWidget
 from recordme.ui.region_selector import RegionSelectorOverlay
 from recordme.ui.toolbar import FloatingToolbar
 from recordme.utils.geometry import Rect
@@ -55,6 +56,7 @@ class RecordMeApp:
         self.controller = RecordingController(session_manager, settings)
         self.toolbar = FloatingToolbar(session_manager)
         self.selector_overlay: RegionSelectorOverlay | None = None
+        self.camera_preview: CameraPreviewWidget | None = None
 
         self._connect_signals()
         self._position_toolbar()
@@ -67,9 +69,37 @@ class RecordMeApp:
         self.toolbar.request_resume_record.connect(self.controller.resume_recording)
         self.toolbar.request_stop_record.connect(self.controller.stop_recording)
         self.toolbar.mic_toggled.connect(self.controller.set_mic_muted)
+        self.toolbar.camera_toggled.connect(self._on_camera_toggled)
 
         self.controller.recording_finished.connect(self._on_recording_finished)
         self.controller.recording_failed.connect(self._on_recording_failed)
+
+    def _on_camera_toggled(self, enabled: bool) -> None:
+        """Activa o desactiva la burbuja de cámara y su previsualización en vivo."""
+        if enabled:
+            success = self.controller.set_camera_enabled(True)
+            if success and self.controller.camera_source:
+                self.camera_preview = CameraPreviewWidget(
+                    initial_layout=self.controller.camera_layout,
+                    capture_region=self.controller.current_region,
+                )
+                self.camera_preview.layout_updated.connect(self.controller.update_camera_layout)
+                self.controller.camera_source.add_on_frame_callback(self.camera_preview.update_frame)
+                self.camera_preview.show()
+                logger.info("Vista previa de cámara mostrada en pantalla.")
+            else:
+                self.toolbar.set_camera_enabled(False)
+                QMessageBox.warning(
+                    self.toolbar,
+                    APP_NAME,
+                    "No se pudo acceder a la cámara. Comprueba que esté conectada y no esté en uso por otra aplicación.",
+                )
+        else:
+            self.controller.set_camera_enabled(False)
+            if self.camera_preview:
+                self.camera_preview.close()
+                self.camera_preview = None
+                logger.info("Vista previa de cámara cerrada.")
 
     def _position_toolbar(self) -> None:
         """Ubica la barra flotante centrada en la parte superior de la pantalla."""
@@ -90,6 +120,8 @@ class RecordMeApp:
         """Aplica la región elegida a la barra y al controlador."""
         self.controller.set_region(region)
         self.toolbar.update_selected_region(region)
+        if self.camera_preview:
+            self.camera_preview.update_capture_region(region)
         if self.selector_overlay:
             self.selector_overlay = None
 

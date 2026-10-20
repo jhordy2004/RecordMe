@@ -9,6 +9,7 @@ from typing import Any
 from PySide6.QtCore import QObject, Signal
 
 from recordme.audio.mic_recorder import MicRecorder
+from recordme.camera.camera_source import CameraSource
 from recordme.capture.base import CaptureBackend
 from recordme.capture.factory import create_capture_backend
 from recordme.capture.mss_fallback import MSSCaptureBackend
@@ -17,7 +18,7 @@ from recordme.compose.compositor import Compositor
 from recordme.config.paths import get_temp_dir
 from recordme.config.settings import AppSettings
 from recordme.core.events import SessionState
-from recordme.core.render_state import RenderState
+from recordme.core.render_state import CameraLayout, RenderState
 from recordme.core.session import SessionManager
 from recordme.encode.muxer import Muxer
 from recordme.encode.video_writer import VideoWriter
@@ -46,12 +47,104 @@ class RecordingController(QObject):
         self._capture_backend: CaptureBackend | None = None
         self._video_writer: VideoWriter | None = None
         self._mic_recorder: MicRecorder | None = None
+        self._camera_source: CameraSource | None = None
+        self._camera_layout = CameraLayout(
+            enabled=False,
+            shape=self.settings.camera.shape,
+            size_pct=self.settings.camera.size_pct,
+            mirror=self.settings.camera.mirror,
+            border_enabled=self.settings.camera.border.enabled,
+            border_width=self.settings.camera.border.width,
+            border_color=self.settings.camera.border.color,
+            name_enabled=self.settings.camera.name.enabled,
+            name_text=self.settings.camera.name.text,
+            name_position=self.settings.camera.name.position,
+        )
         self._compositor: Compositor | None = None
         self._muxer = Muxer()
 
         self._temp_video_file: Path | None = None
         self._temp_audio_file: Path | None = None
         self._output_file: Path | None = None
+
+    @property
+    def camera_source(self) -> CameraSource | None:
+        """Devuelve la fuente de cámara activa si existe."""
+        return self._camera_source
+
+    @property
+    def camera_layout(self) -> CameraLayout:
+        """Devuelve el layout actual de la cámara."""
+        return self._camera_layout
+
+    def set_camera_enabled(self, enabled: bool) -> bool:
+        """Activa o desactiva la cámara tanto en reposo como en plena grabación."""
+        if enabled:
+            if self._camera_source is None:
+                self._camera_source = CameraSource(
+                    fps=self.settings.output.fps,
+                    mirror=self._camera_layout.mirror,
+                )
+                if not self._camera_source.start():
+                    logger.warning("No se pudo iniciar CameraSource.")
+                    self._camera_source = None
+                    return False
+
+            self._camera_layout = CameraLayout(
+                enabled=True,
+                shape=self._camera_layout.shape,
+                center_norm_x=self._camera_layout.center_norm_x,
+                center_norm_y=self._camera_layout.center_norm_y,
+                size_pct=self._camera_layout.size_pct,
+                mirror=self._camera_layout.mirror,
+                border_enabled=self._camera_layout.border_enabled,
+                border_width=self._camera_layout.border_width,
+                border_color=self._camera_layout.border_color,
+                name_enabled=self._camera_layout.name_enabled,
+                name_text=self._camera_layout.name_text,
+                name_position=self._camera_layout.name_position,
+            )
+        else:
+            self._camera_layout = CameraLayout(
+                enabled=False,
+                shape=self._camera_layout.shape,
+                center_norm_x=self._camera_layout.center_norm_x,
+                center_norm_y=self._camera_layout.center_norm_y,
+                size_pct=self._camera_layout.size_pct,
+                mirror=self._camera_layout.mirror,
+                border_enabled=self._camera_layout.border_enabled,
+                border_width=self._camera_layout.border_width,
+                border_color=self._camera_layout.border_color,
+                name_enabled=self._camera_layout.name_enabled,
+                name_text=self._camera_layout.name_text,
+                name_position=self._camera_layout.name_position,
+            )
+            # Si no se está grabando, podemos detener el dispositivo para ahorrar energía
+            if self.session_manager.state != SessionState.RECORDING and self._camera_source:
+                self._camera_source.stop()
+                self._camera_source = None
+
+        if self._compositor is not None:
+            self._compositor.camera_source = self._camera_source
+            self._compositor.update_render_state(self._build_render_state())
+
+        logger.info("Cámara %s", "activada" if enabled else "desactivada")
+        return True
+
+    def update_camera_layout(self, layout: CameraLayout) -> None:
+        """Actualiza la posición y tamaño de la cámara en el compositor en tiempo real."""
+        self._camera_layout = layout
+        if self._compositor is not None:
+            self._compositor.update_render_state(self._build_render_state())
+
+    def _build_render_state(self) -> RenderState:
+        """Construye un snapshot de RenderState inmutable para el Compositor."""
+        return RenderState(
+            capture_region=self.current_region,
+            output_width=self.current_region.width,
+            output_height=self.current_region.height,
+            camera=self._camera_layout,
+        )
 
     def set_region(self, region: Rect) -> None:
         """Establece la región de captura en coordenadas físicas."""
@@ -117,15 +210,11 @@ class RecordingController(QObject):
                 self._mic_recorder.start()
 
             # 4. Iniciar compositor
-            initial_state = RenderState(
-                capture_region=self.current_region,
-                output_width=self.current_region.width,
-                output_height=self.current_region.height,
-            )
             self._compositor = Compositor(
                 capture_backend=self._capture_backend,
                 video_writer=self._video_writer,
-                initial_render_state=initial_state,
+                initial_render_state=self._build_render_state(),
+                camera_source=self._camera_source,
                 fps=fps,
             )
             self._compositor.start()
