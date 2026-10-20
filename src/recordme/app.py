@@ -169,6 +169,7 @@ class RecordMeApp:
         )
         editor.settings_applied.connect(self._on_teleprompter_applied)
         editor.test_requested.connect(self._on_teleprompter_test)
+        editor.stop_test_requested.connect(self._on_teleprompter_stop_test)
         editor.exec()
 
     def _on_teleprompter_applied(self, text: str, settings: TeleprompterSettings) -> None:
@@ -178,17 +179,21 @@ class RecordMeApp:
 
         if self.teleprompter_widget is None:
             self.teleprompter_widget = TeleprompterWidget(text=text, settings=settings)
+            self.teleprompter_widget.closed.connect(self._on_teleprompter_closed)
         else:
             self.teleprompter_widget.update_settings(settings)
             self.teleprompter_widget.set_script(text)
 
         self.teleprompter_widget.show()
+        # Asegurar que la barra flotante permanezca encima y visible para grabar
+        self.toolbar.show()
         logger.info("Teleprompter visible y listo.")
 
     def _on_teleprompter_test(self, text: str, settings: TeleprompterSettings) -> None:
         """Lanza una prueba en vivo del teleprompter con auto-scroll para calibrar."""
         if self.teleprompter_widget is None:
             self.teleprompter_widget = TeleprompterWidget(text=text, settings=settings)
+            self.teleprompter_widget.closed.connect(self._on_teleprompter_closed)
         else:
             self.teleprompter_widget.update_settings(settings)
             self.teleprompter_widget.set_script(text)
@@ -196,6 +201,15 @@ class RecordMeApp:
         self.teleprompter_widget.show()
         self.teleprompter_widget.reset_scroll()
         self.teleprompter_widget.start_scrolling()
+
+    def _on_teleprompter_stop_test(self) -> None:
+        """Detiene la prueba en vivo del teleprompter."""
+        if self.teleprompter_widget:
+            self.teleprompter_widget.pause_scrolling()
+
+    def _on_teleprompter_closed(self) -> None:
+        """Maneja el evento cuando el usuario cierra el teleprompter."""
+        logger.info("Teleprompter cerrado por el usuario.")
 
     def _on_recording_finished(self, output_path: Path) -> None:
         """Muestra aviso al finalizar con opción para abrir la carpeta contenedora."""
@@ -232,6 +246,7 @@ def create_app(argv: list[str] | None = None) -> tuple[QApplication, RecordMeApp
     platform_services.set_dpi_awareness()
 
     app = QApplication(argv)
+    app.setQuitOnLastWindowClosed(False)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_DISPLAY_NAME)
     app.setApplicationVersion(APP_VERSION)

@@ -85,6 +85,7 @@ class TeleprompterSettings:
     enabled: bool = False
     font_size: int = 34
     wpm: int = 130
+    seconds_per_line: float = 3.5
     lines_visible: int = 2
     opacity: float = 0.78
     width_pct: int = 60
@@ -249,6 +250,7 @@ class AppSettings:
                 enabled=bool(tp.get("enabled", instance.teleprompter.enabled)),
                 font_size=int(tp.get("font_size", instance.teleprompter.font_size)),
                 wpm=int(tp.get("wpm", instance.teleprompter.wpm)),
+                seconds_per_line=float(tp.get("seconds_per_line", instance.teleprompter.seconds_per_line)),
                 lines_visible=int(tp.get("lines_visible", instance.teleprompter.lines_visible)),
                 opacity=float(tp.get("opacity", instance.teleprompter.opacity)),
                 width_pct=int(tp.get("width_pct", instance.teleprompter.width_pct)),
