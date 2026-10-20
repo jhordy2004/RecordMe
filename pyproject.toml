@@ -1,0 +1,92 @@
+[project]
+name = "recordme"
+version = "0.1.0"
+description = "Grabador de pantalla con cámara, zoom en vivo, censura y teleprompter"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+authors = [
+    { name = "RecordMe Team" }
+]
+dependencies = [
+    "PySide6>=6.6.0",
+    "numpy>=1.26.0",
+    "opencv-python-headless>=4.8.0",
+    "mss>=9.0.1",
+    "sounddevice>=0.4.6",
+    "soundfile>=0.12.1",
+    "pynput>=1.7.6",
+    "platformdirs>=4.0.0",
+    "imageio-ffmpeg>=0.4.9",
+    "dxcam>=0.1.0; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+segmentation = [
+    "mediapipe>=0.10.9"
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-qt>=4.4.0",
+    "ruff>=0.3.0",
+    "mypy>=1.9.0",
+    "pyinstaller>=6.5.0",
+    "types-Pillow",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = [
+    "dxcam.*",
+    "sounddevice.*",
+    "soundfile.*",
+    "pynput.*",
+    "mss.*",
+    "cv2.*",
+    "imageio_ffmpeg.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --strict-markers"
