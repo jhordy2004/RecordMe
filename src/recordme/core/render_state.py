@@ -9,17 +9,18 @@ from recordme.utils.geometry import Rect
 class CameraLayout:
     """Configuración de renderizado de la cámara en el compositor."""
     enabled: bool = False
-    shape: str = "circle"  # circle, rounded_rect, rect
+    shape: str = "rect"  # rect (por defecto sin bordes), circle
     center_norm_x: float = 0.85
     center_norm_y: float = 0.80
-    size_pct: int = 18
+    size_pct: int = 20
     mirror: bool = True
-    border_enabled: bool = True
-    border_width: int = 4
+    border_enabled: bool = False
+    border_width: int = 0
     border_color: str = "#FFFFFF"
     name_enabled: bool = False
     name_text: str = ""
-    name_position: str = "below"
+    name_position: str = "bottom_left"
+    virtual_bg_image: str | None = None
 
 
 @dataclass(frozen=True)

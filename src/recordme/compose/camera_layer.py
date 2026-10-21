@@ -17,6 +17,48 @@ class CameraLayer:
     def __init__(self) -> None:
         self._cached_mask_key: tuple[str, int, int, int] | None = None
         self._cached_mask: npt.NDArray[np.float32] | None = None
+        self._bg_subtractor: cv2.BackgroundSubtractorMOG2 | None = None
+        self._cached_bg_path: str | None = None
+        self._cached_bg_img: npt.NDArray[np.uint8] | None = None
+
+    def _apply_virtual_background(
+        self,
+        cam_frame: npt.NDArray[np.uint8],
+        bg_path: str,
+    ) -> npt.NDArray[np.uint8]:
+        """Reemplaza el fondo de la cámara por la imagen seleccionada."""
+        try:
+            if self._cached_bg_path != bg_path or self._cached_bg_img is None:
+                loaded = cv2.imread(bg_path)
+                if loaded is not None:
+                    self._cached_bg_path = bg_path
+                    self._cached_bg_img = np.asarray(loaded, dtype=np.uint8)
+                else:
+                    return cam_frame
+
+            if self._cached_bg_img is None:
+                return cam_frame
+
+            h, w = cam_frame.shape[:2]
+            bg_resized = np.asarray(cv2.resize(self._cached_bg_img, (w, h), interpolation=cv2.INTER_LINEAR), dtype=np.uint8)
+
+            if self._bg_subtractor is None:
+                self._bg_subtractor = cv2.createBackgroundSubtractorMOG2(
+                    history=300,
+                    varThreshold=25,
+                    detectShadows=False,
+                )
+
+            fg_mask = self._bg_subtractor.apply(cam_frame)
+            # Suavizado de bordes del sujeto
+            fg_mask = cv2.GaussianBlur(fg_mask, (11, 11), 0)
+            alpha = (fg_mask.astype(np.float32) / 255.0)[:, :, np.newaxis]
+
+            composed = (cam_frame.astype(np.float32) * alpha + bg_resized.astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
+            return composed
+        except Exception as e:
+            logger.debug("Error aplicando fondo virtual: %s", e)
+            return cam_frame
 
     def render(
         self,
@@ -76,6 +118,10 @@ class CameraLayer:
             cv2.resize(cropped_cam, (bubble_w, bubble_h), interpolation=cv2.INTER_LINEAR),
             dtype=np.uint8,
         )
+
+        # 1.5. Aplicar fondo virtual si está configurado
+        if layout.virtual_bg_image:
+            resized_cam = self._apply_virtual_background(resized_cam, layout.virtual_bg_image)
 
         # 2. Obtener o generar máscara con antialiasing
         mask = self._get_mask(layout.shape, bubble_w, bubble_h)
@@ -168,29 +214,30 @@ class CameraLayer:
         cam_h: int,
         position: str,
     ) -> None:
-        """Dibuja la píldora semitransparente con el nombre del expositor."""
+        """Dibuja la píldora semitransparente con efecto blur suave y texto blanco en la esquina inferior izquierda."""
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = max(0.4, cam_w / 400.0)
+        font_scale = max(0.4, min(cam_w, cam_h) / 360.0)
         thickness = 1
         text_size, _ = cv2.getTextSize(text, font, font_scale, thickness)
 
         pill_w = text_size[0] + 16
         pill_h = text_size[1] + 10
-        pill_x = cam_left + (cam_w - pill_w) // 2
 
-        if position == "above":
-            pill_y = max(4, cam_top - pill_h - 4)
-        else:
-            pill_y = min(frame.shape[0] - pill_h - 4, cam_top + cam_h + 4)
+        # Ubicar en la parte inferior izquierda de la cámara
+        pill_x = cam_left + 10
+        pill_y = cam_top + cam_h - pill_h - 10
 
         pill_x = max(0, min(pill_x, frame.shape[1] - pill_w))
+        pill_y = max(0, min(pill_y, frame.shape[0] - pill_h))
 
-        # Dibujar fondo oscuro semitransparente para el nombre
+        # Dibujar fondo oscuro con efecto blur suave y texto blanco
         roi = frame[pill_y : pill_y + pill_h, pill_x : pill_x + pill_w]
         if roi.shape[0] == pill_h and roi.shape[1] == pill_w:
+            blurred_roi = cv2.GaussianBlur(roi, (15, 15), 0)
             dark_bg = np.full_like(roi, (20, 20, 20))
-            cv2.addWeighted(dark_bg, 0.75, roi, 0.25, 0, roi)
-            # Texto blanco centrado
+            blended_roi = cv2.addWeighted(dark_bg, 0.70, blurred_roi, 0.30, 0)
+            frame[pill_y : pill_y + pill_h, pill_x : pill_x + pill_w] = blended_roi
+            # Texto blanco nítido
             text_x = pill_x + 8
             text_y = pill_y + pill_h - 6
             cv2.putText(frame, text, (text_x, text_y), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)

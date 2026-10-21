@@ -83,3 +83,4 @@ def test_recordme_app_instantiation(qtbot: QtBot) -> None:
     assert app.toolbar.isVisible()
     assert app.controller is not None
     app.hotkey_service.stop()
+    app.screen_zoom_overlay.close()

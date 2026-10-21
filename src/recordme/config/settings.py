@@ -43,8 +43,8 @@ class CameraPosition:
 @dataclass
 class CameraBorder:
     """Borde de la burbuja de cámara."""
-    enabled: bool = True
-    width: int = 4
+    enabled: bool = False
+    width: int = 0
     color: str = "#FFFFFF"
 
 
@@ -62,7 +62,7 @@ class CameraName:
     """Nombre superpuesto en la cámara."""
     enabled: bool = False
     text: str = ""
-    position: str = "below"  # below, above
+    position: str = "bottom_left"  # bottom_left, below, above
 
 
 @dataclass
@@ -70,7 +70,7 @@ class CameraSettings:
     """Ajustes de cámara."""
     enabled: bool = False
     device: str = "default"
-    shape: str = "circle"  # circle, rounded_rect, rect
+    shape: str = "rect"  # rect (por defecto sin bordes), circle
     size_pct: int = 18
     position: CameraPosition = field(default_factory=CameraPosition)
     mirror: bool = True

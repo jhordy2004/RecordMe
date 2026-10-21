@@ -16,7 +16,7 @@ from recordme.capture.mss_fallback import MSSCaptureBackend
 from recordme.capture.qt_fallback import QtScreenCaptureBackend
 from recordme.compose.compositor import Compositor
 from recordme.config.paths import get_temp_dir
-from recordme.config.settings import AppSettings
+from recordme.config.settings import AppSettings, CameraSettings
 from recordme.core.events import SessionState
 from recordme.core.render_state import CameraLayout, CensorRegion, RenderState
 from recordme.core.session import SessionManager
@@ -59,6 +59,7 @@ class RecordingController(QObject):
             name_enabled=self.settings.camera.name.enabled,
             name_text=self.settings.camera.name.text,
             name_position=self.settings.camera.name.position,
+            virtual_bg_image=self.settings.camera.background.image if self.settings.camera.background.mode == "image" else None,
         )
         self._compositor: Compositor | None = None
         self._muxer = Muxer()
@@ -109,6 +110,7 @@ class RecordingController(QObject):
                 name_enabled=self._camera_layout.name_enabled,
                 name_text=self._camera_layout.name_text,
                 name_position=self._camera_layout.name_position,
+                virtual_bg_image=self._camera_layout.virtual_bg_image,
             )
         else:
             self._camera_layout = CameraLayout(
@@ -124,6 +126,7 @@ class RecordingController(QObject):
                 name_enabled=self._camera_layout.name_enabled,
                 name_text=self._camera_layout.name_text,
                 name_position=self._camera_layout.name_position,
+                virtual_bg_image=self._camera_layout.virtual_bg_image,
             )
             # Si no se está grabando, podemos detener el dispositivo para ahorrar energía
             if self.session_manager.state != SessionState.RECORDING and self._camera_source:
@@ -142,6 +145,29 @@ class RecordingController(QObject):
         self._camera_layout = layout
         if self._compositor is not None:
             self._compositor.update_render_state(self._build_render_state())
+
+    def apply_camera_settings(self, settings: CameraSettings) -> None:
+        """Aplica la configuración personalizada de la cámara (forma, nombre, fondo)."""
+        self.settings.camera = settings
+        self.settings.save()
+        self._camera_layout = CameraLayout(
+            enabled=self._camera_layout.enabled,
+            shape=settings.shape,
+            center_norm_x=self._camera_layout.center_norm_x,
+            center_norm_y=self._camera_layout.center_norm_y,
+            size_pct=self._camera_layout.size_pct,
+            mirror=settings.mirror,
+            border_enabled=settings.border.enabled,
+            border_width=settings.border.width,
+            border_color=settings.border.color,
+            name_enabled=settings.name.enabled,
+            name_text=settings.name.text,
+            name_position=settings.name.position,
+            virtual_bg_image=settings.background.image if settings.background.mode == "image" else None,
+        )
+        if self._compositor is not None:
+            self._compositor.update_render_state(self._build_render_state())
+        logger.info("Ajustes de cámara aplicados: forma=%s, nombre=%s", settings.shape, settings.name.text)
 
     def set_zoom(self, zoom: float, center_x: float = 0.5, center_y: float = 0.5) -> None:
         """Establece el nivel de zoom y su centro normalizado (0.0 a 1.0)."""
@@ -300,7 +326,38 @@ class RecordingController(QObject):
         """Silencia o activa el micrófono (compatibilidad)."""
         self.set_mic_enabled(not muted)
 
-    def stop_recording(self) -> None:
+    def cancel_recording(self) -> None:
+        """Detiene y cancela la grabación sin muxear ni guardar nada, limpiando temporales."""
+        if self.session_manager.state not in (SessionState.RECORDING, SessionState.PAUSED):
+            return
+
+        logger.info("Cancelando grabación en curso sin guardar...")
+        if self._compositor:
+            self._compositor.stop()
+        if self._capture_backend:
+            self._capture_backend.stop()
+        if self._mic_recorder:
+            self._mic_recorder.stop()
+        if self._video_writer:
+            self._video_writer.close()
+
+        # Eliminar archivos temporales
+        if self._temp_video_file and self._temp_video_file.exists():
+            try:
+                self._temp_video_file.unlink()
+            except OSError:
+                pass
+        if self._temp_audio_file and self._temp_audio_file.exists():
+            try:
+                self._temp_audio_file.unlink()
+            except OSError:
+                pass
+
+        self._cleanup_resources()
+        self.session_manager.transition_to(SessionState.IDLE)
+        logger.info("Grabación cancelada y descartada exitosamente.")
+
+    def stop_recording(self, target_output_file: Path | None = None) -> None:
         """Detiene y finaliza la grabación, realizando el muxing A/V."""
         if self.session_manager.state not in (SessionState.RECORDING, SessionState.PAUSED):
             return
@@ -332,21 +389,24 @@ class RecordingController(QObject):
 
         # Muxing a MP4 final
         assert self._temp_video_file is not None
-        assert self._output_file is not None
+        output_file = target_output_file if target_output_file is not None else self._output_file
+        assert output_file is not None
+
+        output_file.parent.mkdir(parents=True, exist_ok=True)
 
         success = self._muxer.mux(
             video_path=self._temp_video_file,
             audio_path=self._temp_audio_file,
-            output_mp4=self._output_file,
+            output_mp4=output_file,
             offset_seconds=offset_seconds,
         )
 
         self._cleanup_resources()
 
-        if success and self._output_file.exists():
+        if success and output_file.exists():
             self.session_manager.transition_to(SessionState.DONE)
-            logger.info("Grabación completada: %s", self._output_file)
-            self.recording_finished.emit(self._output_file)
+            logger.info("Grabación completada: %s", output_file)
+            self.recording_finished.emit(output_file)
         else:
             msg = "Error durante el muxing final de FFmpeg."
             self.session_manager.transition_to(SessionState.ERROR, error_message=msg)

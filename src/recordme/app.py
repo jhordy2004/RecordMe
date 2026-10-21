@@ -3,12 +3,15 @@
 import logging
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt, QUrl
 from PySide6.QtGui import QColor, QCursor, QDesktopServices, QPalette
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
+    QFileDialog,
     QMessageBox,
 )
 
@@ -21,10 +24,13 @@ from recordme.core.session import SessionManager
 from recordme.platform_services.factory import get_platform_services
 from recordme.platform_services.hotkeys import GlobalHotkeyService
 from recordme.ui.camera_preview import CameraPreviewWidget
+from recordme.ui.camera_settings_dialog import CameraSettingsDialog
 from recordme.ui.censor_box import CensorBoxWidget
+from recordme.ui.censor_selector import CensorAreaSelectorOverlay
 from recordme.ui.countdown import CountdownOverlay
 from recordme.ui.region_frame import RegionFrameWidget
 from recordme.ui.region_selector import RegionSelectorOverlay
+from recordme.ui.screen_zoom_overlay import ScreenZoomOverlay
 from recordme.ui.teleprompter import TeleprompterWidget
 from recordme.ui.teleprompter_editor import TeleprompterEditorDialog
 from recordme.ui.toolbar import FloatingToolbar
@@ -71,6 +77,8 @@ class RecordMeApp:
         self.teleprompter_editor: TeleprompterEditorDialog | None = None
         self.countdown_overlay: CountdownOverlay | None = None
         self.censor_boxes: dict[str, CensorBoxWidget] = {}
+        self.censor_selector_overlay: CensorAreaSelectorOverlay | None = None
+        self.screen_zoom_overlay = ScreenZoomOverlay()
         self._is_testing_teleprompter = False
 
         self._zoom_level: float = 1.0
@@ -93,7 +101,7 @@ class RecordMeApp:
         self.toolbar.mic_toggled.connect(self.controller.set_mic_enabled)
         self.toolbar.camera_toggled.connect(self._on_camera_toggled)
         self.toolbar.teleprompter_clicked.connect(self._open_teleprompter_editor)
-        self.toolbar.censor_clicked.connect(self._add_censor_box)
+        self.toolbar.censor_clicked.connect(self._open_censor_area_selector)
         self.toolbar.request_exit.connect(self._exit_app)
 
         # Atajos globales de zoom y desplazamiento
@@ -109,25 +117,33 @@ class RecordMeApp:
         self.controller.recording_failed.connect(self._on_recording_failed)
 
     def _on_camera_toggled(self, enabled: bool) -> None:
-        """Activa o desactiva la burbuja de cámara y su previsualización en vivo."""
+        """Abre el panel de configuración de cámara antes de activarla o la desactiva."""
         if enabled:
-            success = self.controller.set_camera_enabled(True)
-            if success and self.controller.camera_source:
-                self.camera_preview = CameraPreviewWidget(
-                    initial_layout=self.controller.camera_layout,
-                    capture_region=self.controller.current_region,
-                )
-                self.camera_preview.layout_updated.connect(self.controller.update_camera_layout)
-                self.controller.camera_source.add_on_frame_callback(self.camera_preview.update_frame)
-                self.camera_preview.show()
-                logger.info("Vista previa de cámara mostrada en pantalla.")
+            dialog = CameraSettingsDialog(current_settings=self.settings.camera, parent=self.toolbar)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self.controller.apply_camera_settings(self.settings.camera)
+                success = self.controller.set_camera_enabled(True)
+                if success and self.controller.camera_source:
+                    if self.camera_preview:
+                        self.camera_preview.close()
+                    self.camera_preview = CameraPreviewWidget(
+                        initial_layout=self.controller.camera_layout,
+                        capture_region=self.controller.current_region,
+                    )
+                    self.camera_preview.layout_updated.connect(self.controller.update_camera_layout)
+                    self.controller.camera_source.add_on_frame_callback(self.camera_preview.update_frame)
+                    self.camera_preview.show()
+                    self.toolbar.set_camera_enabled(True)
+                    logger.info("Vista previa de cámara mostrada en pantalla.")
+                else:
+                    self.toolbar.set_camera_enabled(False)
+                    QMessageBox.warning(
+                        self.toolbar,
+                        APP_NAME,
+                        "No se pudo acceder a la cámara. Comprueba que esté conectada y no esté en uso por otra aplicación.",
+                    )
             else:
                 self.toolbar.set_camera_enabled(False)
-                QMessageBox.warning(
-                    self.toolbar,
-                    APP_NAME,
-                    "No se pudo acceder a la cámara. Comprueba que esté conectada y no esté en uso por otra aplicación.",
-                )
         else:
             self.controller.set_camera_enabled(False)
             if self.camera_preview:
@@ -293,40 +309,50 @@ class RecordMeApp:
         logger.info("Paneo de zoom desplazado: centro en (%.2f, %.2f)", self._zoom_cx, self._zoom_cy)
 
     def _apply_zoom(self) -> None:
-        """Aplica el nivel de zoom y centro al controlador y actualiza la barra."""
+        """Aplica el nivel de zoom y centro al controlador, a la barra y al overlay de pantalla completa."""
         if self._zoom_level <= 1.01:
             self._zoom_cx = 0.5
             self._zoom_cy = 0.5
         self.controller.set_zoom(self._zoom_level, self._zoom_cx, self._zoom_cy)
         self.toolbar.update_zoom_display(self._zoom_level)
+        self.screen_zoom_overlay.set_zoom(self._zoom_level, self._zoom_cx, self._zoom_cy)
 
-    def _add_censor_box(self) -> None:
-        """Crea un nuevo recuadro interactivo de censura en pantalla."""
+    def _open_censor_area_selector(self) -> None:
+        """Abre el overlay para que el usuario trace interactivamente el área a censurar."""
+        self.censor_selector_overlay = CensorAreaSelectorOverlay()
+        self.censor_selector_overlay.area_selected.connect(self._on_censor_area_drawn)
+        self.censor_selector_overlay.show()
+
+    def _on_censor_area_drawn(self, rect: QRect) -> None:
+        """Crea un nuevo recuadro de censura en el área exacta seleccionada por el usuario."""
+        self.censor_selector_overlay = None
+        self._create_censor_box(rect=rect, mode="blur")
+
+    def _create_censor_box(self, rect: QRect, mode: str = "blur") -> CensorBoxWidget:
+        """Crea y registra una caja de censura flotante."""
         screen = QApplication.primaryScreen()
         dpr = screen.devicePixelRatio() if screen else 1.0
 
-        reg = self.controller.current_region
-        log_w = to_logical_pixels(reg.width, dpr)
-        log_h = to_logical_pixels(reg.height, dpr)
-        log_x = to_logical_pixels(reg.x, dpr)
-        log_y = to_logical_pixels(reg.y, dpr)
-
-        box_w = min(260, max(120, log_w // 2))
-        box_h = min(140, max(80, log_h // 3))
-        cx = log_x + (log_w - box_w) // 2
-        cy = log_y + (log_h - box_h) // 2
-
         box_id = str(uuid.uuid4())[:8]
-        initial_rect = QRect(cx, cy, box_w, box_h)
-
-        box = CensorBoxWidget(box_id=box_id, initial_rect=initial_rect, mode="blur", dpr=dpr)
+        box = CensorBoxWidget(box_id=box_id, initial_rect=rect, mode=mode, dpr=dpr)
         box.geometry_changed.connect(self._on_censor_box_changed)
         box.box_closed.connect(self._on_censor_box_closed)
+        box.duplicate_requested.connect(self._on_censor_box_duplicate)
 
         self.censor_boxes[box_id] = box
         self._sync_censor_regions()
         box.show()
-        logger.info("Caja de censura creada: %s en %s", box_id, initial_rect)
+        logger.info("Caja de censura creada: %s en %s", box_id, rect)
+        return box
+
+    def _on_censor_box_duplicate(self, box_id: str) -> None:
+        """Duplica una caja de censura existente con un desplazamiento de +25px."""
+        orig_box = self.censor_boxes.get(box_id)
+        if not orig_box:
+            return
+        orig_geom = orig_box.geometry()
+        dup_rect = QRect(orig_geom.x() + 25, orig_geom.y() + 25, orig_geom.width(), orig_geom.height())
+        self._create_censor_box(rect=dup_rect, mode=orig_box.mode)
 
     def _on_censor_box_changed(self, box_id: str, phys_rect: Rect, mode: str) -> None:
         """Actualiza las regiones de censura activas al mover o redimensionar una caja."""
@@ -363,8 +389,32 @@ class RecordMeApp:
             self.teleprompter_widget.resume_scrolling()
 
     def _stop_recording(self) -> None:
-        """Detiene la grabación, cierra el marco de área seleccionada y pausa el teleprompter."""
-        self.controller.stop_recording()
+        """Detiene la grabación solicitando interactivamente al usuario la ruta y nombre para guardar."""
+        now_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        output_folder = Path(self.settings.output.folder)
+        output_folder.mkdir(parents=True, exist_ok=True)
+        default_file = output_folder / f"Grabacion_{now_str}.mp4"
+
+        # Diálogo nativo modal y sobrepuesto sobre la barra flotante
+        dialog = QFileDialog(self.toolbar, "Guardar grabación", str(default_file), "Video MP4 (*.mp4)")
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDefaultSuffix("mp4")
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        dialog.raise_()
+        dialog.activateWindow()
+
+        target_path: Path | None = None
+        if dialog.exec() == QFileDialog.DialogCode.Accepted:
+            files = dialog.selectedFiles()
+            if files:
+                target_path = Path(files[0])
+
+        if target_path is not None:
+            self.controller.stop_recording(target_output_file=target_path)
+        else:
+            # Usuario canceló el guardado: descartar la grabación limpia
+            self.controller.cancel_recording()
+
         if self.region_frame:
             self.region_frame.close()
             self.region_frame = None
@@ -458,10 +508,10 @@ class RecordMeApp:
             self._position_toolbar(at_bottom=False)
 
     def _exit_app(self) -> None:
-        """Cierra ordenadamente la aplicación liberando todos los recursos."""
+        """Cierra inmediatamente la aplicación sin guardar nada si está grabando."""
         logger.info("Cierre de aplicación solicitado.")
-        if self.session_manager.state in (SessionState.RECORDING, SessionState.PAUSED):
-            self.controller.stop_recording()
+        if self.session_manager.state in (SessionState.RECORDING, SessionState.PAUSED, SessionState.COUNTDOWN):
+            self.controller.cancel_recording()
         self.hotkey_service.stop()
         for box in list(self.censor_boxes.values()):
             box.close()
@@ -476,17 +526,24 @@ class RecordMeApp:
             self.region_frame.close()
         if self.selector_overlay:
             self.selector_overlay.close()
+        if self.censor_selector_overlay:
+            self.censor_selector_overlay.close()
+        self.screen_zoom_overlay.set_zoom(1.0)
+        self.screen_zoom_overlay.close()
         self.toolbar.close()
         QApplication.quit()
 
     def _on_recording_finished(self, output_path: Path) -> None:
-        """Muestra aviso al finalizar con opción para abrir la carpeta contenedora."""
+        """Muestra aviso al finalizar sobrepuesto en pantalla con opción para abrir la carpeta contenedora."""
         msg_box = QMessageBox(self.toolbar)
+        msg_box.setWindowFlags(msg_box.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         msg_box.setWindowTitle(APP_NAME)
         msg_box.setText(f"Grabación guardada con éxito:\n\n{output_path.name}")
         msg_box.setInformativeText(f"Ubicación: {output_path.parent}")
         open_folder_btn = msg_box.addButton("Abrir carpeta", QMessageBox.ButtonRole.ActionRole)
         msg_box.addButton("Aceptar", QMessageBox.ButtonRole.AcceptRole)
+        msg_box.raise_()
+        msg_box.activateWindow()
         msg_box.exec()
 
         if msg_box.clickedButton() == open_folder_btn:

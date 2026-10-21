@@ -100,3 +100,26 @@ def test_censor_box_edge_detection() -> None:
     assert box._determine_edge(QPoint(2, 50)) == BoxEdge.LEFT
     # Interior -> MOVE
     assert box._determine_edge(QPoint(100, 50)) == BoxEdge.MOVE
+
+
+def test_censor_box_duplicate_button(qtbot: QtBot) -> None:
+    """Verifica que hacer clic en el botón de duplicar emita duplicate_requested."""
+    initial_rect = QRect(50, 50, 200, 100)
+    box = CensorBoxWidget(box_id="dup-box", initial_rect=initial_rect, mode="blur", dpr=1.0)
+    qtbot.addWidget(box)
+    box.show()
+
+    btn_rect = box._btn_copy_rect
+    click_pos = QPoint(btn_rect.center().x(), btn_rect.center().y())
+
+    with qtbot.waitSignal(box.duplicate_requested) as blocker:
+        event = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            click_pos,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        box.mousePressEvent(event)
+
+    assert blocker.args[0] == "dup-box"

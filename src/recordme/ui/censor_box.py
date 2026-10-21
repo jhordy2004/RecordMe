@@ -43,6 +43,7 @@ class CensorBoxWidget(QWidget):
 
     geometry_changed = Signal(str, Rect, str)  # (box_id, phys_rect, mode)
     box_closed = Signal(str)  # box_id
+    duplicate_requested = Signal(str)  # box_id
 
     BORDER_GRAB = 8
     MIN_SIZE = 60
@@ -74,6 +75,7 @@ class CensorBoxWidget(QWidget):
         self._drag_start_geom: QRect | None = None
 
         self._btn_close_rect = QRect(0, 0, 0, 0)
+        self._btn_copy_rect = QRect(0, 0, 0, 0)
         self._btn_mode_rect = QRect(0, 0, 0, 0)
 
         self.setGeometry(initial_rect)
@@ -82,7 +84,8 @@ class CensorBoxWidget(QWidget):
     def _update_button_rects(self) -> None:
         """Calcula la posición de los botones en la barra superior del recuadro."""
         w = max(self.MIN_SIZE, self.width())
-        self._btn_mode_rect = QRect(4, 2, min(90, max(10, w - 30)), 18)
+        self._btn_mode_rect = QRect(4, 2, min(80, max(10, w - 55)), 18)
+        self._btn_copy_rect = QRect(w - 48, 2, 20, 18)
         self._btn_close_rect = QRect(w - 24, 2, 20, 18)
 
     def resizeEvent(self, event: Any) -> None:  # noqa: N802
@@ -127,7 +130,11 @@ class CensorBoxWidget(QWidget):
             return edge
 
         # Si está en el cuerpo interior pero no sobre los botones de la barra superior
-        if not self._btn_close_rect.contains(pos) and not self._btn_mode_rect.contains(pos):
+        if (
+            not self._btn_close_rect.contains(pos)
+            and not self._btn_mode_rect.contains(pos)
+            and not self._btn_copy_rect.contains(pos)
+        ):
             return BoxEdge.MOVE
 
         return BoxEdge.NONE
@@ -157,6 +164,13 @@ class CensorBoxWidget(QWidget):
                 logger.info("Caja de censura %s cerrada por usuario.", self.box_id)
                 self.close()
                 self.box_closed.emit(self.box_id)
+                event.accept()
+                return
+
+            # Botón Copiar / Duplicar
+            if self._btn_copy_rect.contains(pos):
+                logger.info("Caja de censura %s: duplicación solicitada.", self.box_id)
+                self.duplicate_requested.emit(self.box_id)
                 event.accept()
                 return
 
@@ -226,8 +240,20 @@ class CensorBoxWidget(QWidget):
             self.geometry_changed.emit(self.box_id, self.get_physical_region(), self.mode)
             event.accept()
 
+    def keyPressEvent(self, event: Any) -> None:  # noqa: N802
+        """Atajos de teclado: Ctrl+C o Ctrl+D para duplicar, Del o Esc para cerrar."""
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() in (Qt.Key.Key_C, Qt.Key.Key_D):
+            self.duplicate_requested.emit(self.box_id)
+            event.accept()
+        elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Escape):
+            self.close()
+            self.box_closed.emit(self.box_id)
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
-        """Dibuja el recuadro visual de censura con borde, barra superior y botón de cerrar."""
+        """Dibuja el recuadro visual de censura con borde, barra superior y botones de control."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -260,17 +286,23 @@ class CensorBoxWidget(QWidget):
         painter.drawRoundedRect(top_bar_rect, 6, 6)
 
         # Botón / Etiqueta de Modo a la izquierda
-        self._btn_mode_rect = QRect(4, 2, min(90, w - 30), 18)
         painter.setBrush(accent.darker(150))
         painter.drawRoundedRect(self._btn_mode_rect, 3, 3)
-
         painter.setPen(QColor(255, 255, 255))
         font_mode = QFont("Segoe UI", 8, QFont.Weight.Bold)
         painter.setFont(font_mode)
         painter.drawText(self._btn_mode_rect, Qt.AlignmentFlag.AlignCenter, mode_text)
 
+        # Botón Copiar / Duplicar (📋)
+        if w >= 110:
+            painter.setBrush(QColor(50, 50, 50, 220))
+            painter.drawRoundedRect(self._btn_copy_rect, 3, 3)
+            painter.setPen(QColor(255, 255, 255))
+            font_copy = QFont("Segoe UI", 8)
+            painter.setFont(font_copy)
+            painter.drawText(self._btn_copy_rect, Qt.AlignmentFlag.AlignCenter, "📋")
+
         # Botón Cerrar (✕) a la derecha
-        self._btn_close_rect = QRect(w - 24, 2, 20, 18)
         painter.setBrush(QColor(180, 30, 30, 200))
         painter.drawRoundedRect(self._btn_close_rect, 3, 3)
         painter.setPen(QColor(255, 255, 255))
