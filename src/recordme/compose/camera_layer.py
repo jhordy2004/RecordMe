@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
+from recordme.camera.segmenter import CameraSegmenter
 from recordme.core.render_state import CameraLayout
 
 logger = logging.getLogger(__name__)
@@ -26,39 +27,8 @@ class CameraLayer:
         cam_frame: npt.NDArray[np.uint8],
         bg_path: str,
     ) -> npt.NDArray[np.uint8]:
-        """Reemplaza el fondo de la cámara por la imagen seleccionada."""
-        try:
-            if self._cached_bg_path != bg_path or self._cached_bg_img is None:
-                loaded = cv2.imread(bg_path)
-                if loaded is not None:
-                    self._cached_bg_path = bg_path
-                    self._cached_bg_img = np.asarray(loaded, dtype=np.uint8)
-                else:
-                    return cam_frame
-
-            if self._cached_bg_img is None:
-                return cam_frame
-
-            h, w = cam_frame.shape[:2]
-            bg_resized = np.asarray(cv2.resize(self._cached_bg_img, (w, h), interpolation=cv2.INTER_LINEAR), dtype=np.uint8)
-
-            if self._bg_subtractor is None:
-                self._bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-                    history=300,
-                    varThreshold=25,
-                    detectShadows=False,
-                )
-
-            fg_mask = self._bg_subtractor.apply(cam_frame)
-            # Suavizado de bordes del sujeto
-            fg_mask = cv2.GaussianBlur(fg_mask, (11, 11), 0)
-            alpha = (fg_mask.astype(np.float32) / 255.0)[:, :, np.newaxis]
-
-            composed = (cam_frame.astype(np.float32) * alpha + bg_resized.astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
-            return composed
-        except Exception as e:
-            logger.debug("Error aplicando fondo virtual: %s", e)
-            return cam_frame
+        """Reemplaza el fondo de la cámara por la imagen seleccionada usando DNN segmenter."""
+        return CameraSegmenter.get_instance().apply_background(cam_frame, bg_path)
 
     def render(
         self,
@@ -223,9 +193,9 @@ class CameraLayer:
         pill_w = text_size[0] + 16
         pill_h = text_size[1] + 10
 
-        # Ubicar en la parte inferior izquierda de la cámara
-        pill_x = cam_left + 10
-        pill_y = cam_top + cam_h - pill_h - 10
+        # Ubicar exactamente en el borde inferior izquierdo de la cámara sin margen inferior
+        pill_x = cam_left
+        pill_y = cam_top + cam_h - pill_h
 
         pill_x = max(0, min(pill_x, frame.shape[1] - pill_w))
         pill_y = max(0, min(pill_y, frame.shape[0] - pill_h))

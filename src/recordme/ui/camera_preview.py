@@ -22,6 +22,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
+from recordme.camera.segmenter import CameraSegmenter
 from recordme.core.render_state import CameraLayout
 from recordme.platform_services.factory import get_platform_services
 from recordme.utils.geometry import Rect, to_logical_pixels, to_physical_pixels
@@ -84,10 +85,15 @@ class CameraPreviewWidget(QWidget):
         self._sync_normalized_position()
 
     def update_frame(self, frame_bgr: npt.NDArray[np.uint8]) -> None:
-        """Recibe un nuevo fotograma BGR de la cámara y actualiza el pixmap."""
+        """Recibe un nuevo fotograma BGR de la cámara, aplica fondo virtual si existe y actualiza el pixmap."""
         try:
-            h, w = frame_bgr.shape[:2]
-            qimg = QImage(frame_bgr.data, w, h, w * 3, QImage.Format.Format_BGR888)
+            processed_frame = frame_bgr
+            if self.layout_config.virtual_bg_image:
+                processed_frame = CameraSegmenter.get_instance().apply_background(
+                    frame_bgr, self.layout_config.virtual_bg_image
+                )
+            h, w = processed_frame.shape[:2]
+            qimg = QImage(processed_frame.data, w, h, w * 3, QImage.Format.Format_BGR888)
             self._current_pixmap = QPixmap.fromImage(qimg.copy())
             self.update()
         except Exception as e:
@@ -258,7 +264,8 @@ class CameraPreviewWidget(QWidget):
             fm = painter.fontMetrics()
             t_w = fm.horizontalAdvance(text) + 16
             t_h = fm.height() + 8
-            badge_rect = QRect(8, self.height() - t_h - 8, min(t_w, self.width() - 16), t_h)
+            # Ubicar pegado al borde inferior izquierdo sin margen inferior
+            badge_rect = QRect(0, self.height() - t_h, min(t_w, self.width()), t_h)
 
             painter.save()
             # Fondo traslúcido con borde suave estilo frosted glass
@@ -276,11 +283,11 @@ class CameraPreviewWidget(QWidget):
         dpr = screen.devicePixelRatio() if screen else 1.0
 
         if self.layout_config.shape == "circle":
-            log_w = 260
-            log_h = 260
+            log_w = 200
+            log_h = 200
         else:
-            log_w = 320
-            log_h = 240
+            log_w = 230
+            log_h = 120
 
         self.resize(log_w, log_h)
 

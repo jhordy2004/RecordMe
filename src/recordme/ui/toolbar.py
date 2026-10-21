@@ -16,6 +16,7 @@ from recordme.core.events import SessionState
 from recordme.core.session import SessionManager
 from recordme.platform_services.factory import get_platform_services
 from recordme.utils.geometry import Rect, get_primary_screen_physical_rect
+from recordme.utils.i18n import tr
 
 logger = logging.getLogger(__name__)
 
@@ -89,31 +90,31 @@ class FloatingToolbar(QWidget):
         self.layout_main.addWidget(self.zoom_badge)
 
         # Botón Seleccionar Área
-        self.btn_area = QPushButton("Área")
+        self.btn_area = QPushButton(tr("tb_area"))
         self.btn_area.setStyleSheet(self._button_style("#333333", "#444444"))
         self.btn_area.clicked.connect(self.request_region_selection.emit)
         self.layout_main.addWidget(self.btn_area)
 
         # Botón Micrófono
-        self.btn_mic = QPushButton("Mic: On")
+        self.btn_mic = QPushButton(f"{tr('tb_microphone')}: On")
         self.btn_mic.setStyleSheet(self._button_style("#333333", "#444444"))
         self.btn_mic.clicked.connect(self._toggle_mic)
         self.layout_main.addWidget(self.btn_mic)
 
         # Botón Cámara
-        self.btn_cam = QPushButton("Cámara: Off")
+        self.btn_cam = QPushButton(f"{tr('tb_camera')}: Off")
         self.btn_cam.setStyleSheet(self._button_style("#333333", "#444444"))
         self.btn_cam.clicked.connect(self._toggle_camera)
         self.layout_main.addWidget(self.btn_cam)
 
         # Botón Teleprompter
-        self.btn_teleprompter = QPushButton("Teleprompter")
+        self.btn_teleprompter = QPushButton(tr("tb_teleprompter"))
         self.btn_teleprompter.setStyleSheet(self._button_style("#333333", "#444444"))
         self.btn_teleprompter.clicked.connect(self.teleprompter_clicked.emit)
         self.layout_main.addWidget(self.btn_teleprompter)
 
         # Botón Censura en Tiempo Real
-        self.btn_censor = QPushButton("+ Censurar")
+        self.btn_censor = QPushButton(tr("tb_censor"))
         self.btn_censor.setStyleSheet(self._button_style("#333333", "#444444"))
         self.btn_censor.setToolTip("Añadir recuadro flotante de censura ajustable")
         self.btn_censor.clicked.connect(self.censor_clicked.emit)
@@ -130,20 +131,20 @@ class FloatingToolbar(QWidget):
         self.layout_main.addWidget(self.timer_label)
 
         # Botón Pausar / Reanudar
-        self.btn_pause = QPushButton("Pausar")
+        self.btn_pause = QPushButton(tr("tb_pause"))
         self.btn_pause.setStyleSheet(self._button_style("#E67E22", "#D35400"))
         self.btn_pause.setVisible(False)
         self.btn_pause.clicked.connect(self._toggle_pause)
         self.layout_main.addWidget(self.btn_pause)
 
         # Botón Principal (Grabar / Detener)
-        self.btn_record = QPushButton("Grabar")
+        self.btn_record = QPushButton(tr("tb_record"))
         self.btn_record.setStyleSheet(self._button_style("#E50914", "#FF1E27"))
         self.btn_record.clicked.connect(self._on_record_clicked)
         self.layout_main.addWidget(self.btn_record)
 
         # Botón Cerrar Aplicación (✕ Salir)
-        self.btn_close_app = QPushButton("✕ Salir")
+        self.btn_close_app = QPushButton(tr("tb_exit"))
         self.btn_close_app.setToolTip("Cerrar RecordMe")
         self.btn_close_app.setStyleSheet(
             """
@@ -243,7 +244,8 @@ class FloatingToolbar(QWidget):
     def _toggle_mic(self) -> None:
         """Alterna el estado del micrófono."""
         self._mic_enabled = not self._mic_enabled
-        self.btn_mic.setText("Mic: On" if self._mic_enabled else "Mic: Mute")
+        status = "On" if self._mic_enabled else "Mute"
+        self.btn_mic.setText(f"{tr('tb_microphone')}: {status}")
         self.btn_mic.setStyleSheet(
             self._button_style("#333333", "#444444")
             if self._mic_enabled
@@ -259,7 +261,8 @@ class FloatingToolbar(QWidget):
     def set_camera_enabled(self, enabled: bool) -> None:
         """Actualiza el botón y estado de la cámara."""
         self._cam_enabled = enabled
-        self.btn_cam.setText("Cámara: On" if self._cam_enabled else "Cámara: Off")
+        status = "On" if self._cam_enabled else "Off"
+        self.btn_cam.setText(f"{tr('tb_camera')}: {status}")
         self.btn_cam.setStyleSheet(
             self._button_style("#007ACC", "#0098FF")
             if self._cam_enabled
@@ -293,14 +296,14 @@ class FloatingToolbar(QWidget):
             self.btn_area.setVisible(False)
             self.timer_label.setVisible(True)
             self.btn_pause.setVisible(True)
-            self.btn_pause.setText("Pausar")
-            self.btn_record.setText("Detener")
+            self.btn_pause.setText(tr("tb_pause"))
+            self.btn_record.setText(tr("tb_stop"))
             self.btn_record.setStyleSheet(self._button_style("#C0392B", "#962D22"))
             if not self._timer.isActive():
                 self._elapsed_seconds = 0
                 self._timer.start()
         elif new_state == SessionState.PAUSED:
-            self.btn_pause.setText("Reanudar")
+            self.btn_pause.setText(tr("tb_resume"))
             self._timer.stop()
         elif new_state == SessionState.COUNTDOWN:
             self.btn_record.setText("3...")
@@ -310,7 +313,7 @@ class FloatingToolbar(QWidget):
             self.btn_area.setVisible(True)
             self.timer_label.setVisible(False)
             self.btn_pause.setVisible(False)
-            self.btn_record.setText("Grabar")
+            self.btn_record.setText(tr("tb_record"))
             self.btn_record.setEnabled(True)
             self.btn_record.setStyleSheet(self._button_style("#E50914", "#FF1E27"))
         elif new_state == SessionState.FINALIZING:

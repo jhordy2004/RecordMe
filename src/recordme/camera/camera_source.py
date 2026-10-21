@@ -37,6 +37,11 @@ class CameraSource:
         self._lock = threading.Lock()
         self._on_frame_callbacks: list[Callable[[npt.NDArray[np.uint8]], None]] = []
 
+    @property
+    def is_running(self) -> bool:
+        """Indica si el hilo de captura de cámara está activo."""
+        return self._is_running
+
     def add_on_frame_callback(self, callback: Callable[[npt.NDArray[np.uint8]], None]) -> None:
         """Registra un callback para recibir cada nuevo fotograma (usado por la vista previa UI)."""
         if callback not in self._on_frame_callbacks:

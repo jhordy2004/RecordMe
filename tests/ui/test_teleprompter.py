@@ -57,15 +57,16 @@ def test_teleprompter_editor_dialog(qtbot: QtBot) -> None:
     dialog.text_edit.setPlainText("Una dos tres cuatro seis.")
     assert "5 palabras" in dialog.stats_label.text()
 
-    # Probar inicio de prueba
-    assert dialog.btn_test.text() == "▶ Probar Teleprompter"
-    with qtbot.waitSignal(dialog.test_requested, timeout=1000):
-        dialog._start_test()
-    assert not dialog.isVisible()
+    # Probar inicio de prueba in situ (dentro del panel)
+    assert "Probar" in dialog.btn_test.text()
+    dialog._toggle_in_panel_test()
+    assert dialog._is_testing is True
+    assert "Detener" in dialog.btn_test.text()
 
-    # Reabrir editor
-    dialog.show()
-    assert dialog.isVisible()
+    # Detener prueba in situ
+    dialog._toggle_in_panel_test()
+    assert dialog._is_testing is False
+    assert "Probar" in dialog.btn_test.text()
 
     # Probar obtención de ajustes
     new_settings = dialog.get_current_settings()

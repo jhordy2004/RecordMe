@@ -13,10 +13,10 @@ def test_camera_settings_dialog_defaults(qtbot: QtBot) -> None:
     qtbot.addWidget(dialog)
     dialog.show()
 
-    assert dialog.combo_shape.currentText() == "Rectángulo (sin bordes)"
-    assert dialog.spin_width.value() == 320
-    assert dialog.spin_height.value() == 240
-    assert dialog.chk_virtual_bg.isChecked() is False
+    assert dialog.combo_shape.currentData() == "rect"
+    assert dialog.spin_width.value() == 230
+    assert dialog.spin_height.value() == 120
+    assert dialog._bg_image_path is None
 
     # Probar cambio a forma circular y nombre de expositor
     dialog.combo_shape.setCurrentIndex(1)

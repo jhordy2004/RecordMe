@@ -26,6 +26,11 @@ class GlobalHotkeyService(QObject):
         super().__init__(parent)
         self._listener: keyboard.Listener | None = None
         self._pressed_keys: set[Any] = set()
+        self._zoom_active: bool = False
+
+    def set_zoom_active(self, active: bool) -> None:
+        """Habilita o deshabilita la navegación directa con flechas y <> cuando el zoom está activo."""
+        self._zoom_active = active
 
     def start(self) -> bool:
         """Inicia el escuchador de teclado global."""
@@ -74,13 +79,31 @@ class GlobalHotkeyService(QObject):
     def _on_press(self, key: Any) -> None:
         """Manejador de pulsación de teclas."""
         self._pressed_keys.add(key)
+        char = getattr(key, "char", None)
+        vk = getattr(key, "vk", None)
         ctrl = self._is_ctrl_pressed()
+
+        # Si el zoom está activo (>100%), permitir flechas y <> sin necesidad de presionar Ctrl
+        if self._zoom_active or ctrl:
+            if key == keyboard.Key.up or vk == 38:
+                logger.info("Hotkey global detectado: Pan Arriba")
+                self.pan_up.emit()
+                return
+            elif key == keyboard.Key.down or vk == 40:
+                logger.info("Hotkey global detectado: Pan Abajo")
+                self.pan_down.emit()
+                return
+            elif key == keyboard.Key.left or vk in (37, 188) or char in ("<", ","):
+                logger.info("Hotkey global detectado: Pan Izquierda")
+                self.pan_left.emit()
+                return
+            elif key == keyboard.Key.right or vk in (39, 190) or char in (">", "."):
+                logger.info("Hotkey global detectado: Pan Derecha")
+                self.pan_right.emit()
+                return
 
         if not ctrl:
             return
-
-        char = getattr(key, "char", None)
-        vk = getattr(key, "vk", None)
 
         # 1. Zoom In (Ctrl + '+' o Ctrl + '=')
         # vk: 187=VK_OEM_PLUS, 107=VK_ADD, 43=Plus, 61=Equal
@@ -102,20 +125,6 @@ class GlobalHotkeyService(QObject):
             logger.info("Hotkey global detectado: Zoom Reset (char=%s, vk=%s)", char, vk)
             self.zoom_reset.emit()
             return
-
-        # 4. Desplazamiento / Paneo con flechas (Ctrl + Flecha)
-        if key == keyboard.Key.up or vk == 38:
-            logger.info("Hotkey global detectado: Pan Arriba")
-            self.pan_up.emit()
-        elif key == keyboard.Key.down or vk == 40:
-            logger.info("Hotkey global detectado: Pan Abajo")
-            self.pan_down.emit()
-        elif key == keyboard.Key.left or vk == 37:
-            logger.info("Hotkey global detectado: Pan Izquierda")
-            self.pan_left.emit()
-        elif key == keyboard.Key.right or vk == 39:
-            logger.info("Hotkey global detectado: Pan Derecha")
-            self.pan_right.emit()
 
     def _on_release(self, key: Any) -> None:
         """Manejador de liberación de teclas."""

@@ -1,10 +1,21 @@
-"""Diálogo interactivo de configuración de cámara: forma, dimensiones, nombre y fondo virtual."""
+"""Diálogo interactivo de configuración de cámara: forma, dimensiones, nombre, fondo virtual y vista previa en vivo."""
 
 import logging
+from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+import numpy as np
+import numpy.typing as npt
+from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPaintEvent,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -18,146 +29,305 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from recordme.camera.camera_source import CameraSource
+from recordme.camera.segmenter import CameraSegmenter
 from recordme.config.settings import CameraSettings
 from recordme.constants import APP_NAME
+from recordme.utils.i18n import tr
 
 logger = logging.getLogger(__name__)
 
 
+class _LivePreviewCanvas(QWidget):
+    """Lienzo que muestra la cámara en tiempo real con la forma, fondo virtual y nombre seleccionados."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(260, 150)
+        self._current_pixmap: QPixmap | None = None
+        self._shape: str = "rect"
+        self._name_text: str = ""
+        self._bg_path: str | None = None
+
+    def update_settings(self, shape: str, name_text: str, bg_path: str | None) -> None:
+        """Actualiza los parámetros visuales de la vista previa."""
+        self._shape = shape
+        self._name_text = name_text
+        self._bg_path = bg_path
+        self.update()
+
+    def update_frame(self, frame_bgr: npt.NDArray[np.uint8]) -> None:
+        """Recibe el fotograma BGR de la cámara, aplica fondo virtual si existe y repinta."""
+        try:
+            processed = frame_bgr
+            if self._bg_path:
+                processed = CameraSegmenter.get_instance().apply_background(frame_bgr, self._bg_path)
+            h, w = processed.shape[:2]
+            qimg = QImage(processed.data, w, h, w * 3, QImage.Format.Format_BGR888)
+            self._current_pixmap = QPixmap.fromImage(qimg.copy())
+            self.update()
+        except Exception as e:
+            logger.debug("Error en live preview frame: %s", e)
+
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
+        """Dibuja la vista previa con máscara de forma y etiqueta de nombre."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        rect = self.rect()
+        path = QPainterPath()
+
+        if self._shape == "circle":
+            size = min(rect.width(), rect.height()) - 6
+            x = (rect.width() - size) // 2
+            y = (rect.height() - size) // 2
+            path.addEllipse(QRect(x, y, size, size))
+        else:
+            path.addRect(QRect(1, 1, rect.width() - 2, rect.height() - 2))
+
+        painter.save()
+        painter.setClipPath(path)
+
+        if self._current_pixmap is not None and not self._current_pixmap.isNull():
+            scaled = self._current_pixmap.scaled(
+                self.size(),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            dx = (scaled.width() - self.width()) // 2
+            dy = (scaled.height() - self.height()) // 2
+            painter.drawPixmap(-dx, -dy, scaled)
+        else:
+            painter.fillRect(rect, QColor(35, 35, 35))
+            painter.setPen(QColor(160, 160, 160))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, tr("cam_live_preview"))
+
+        painter.restore()
+
+        # Dibujar nombre opcional en el borde inferior
+        if self._name_text:
+            font = QFont("Segoe UI", 9, QFont.Weight.Bold)
+            painter.setFont(font)
+            fm = painter.fontMetrics()
+            t_w = fm.horizontalAdvance(self._name_text) + 12
+            t_h = fm.height() + 6
+            badge_rect = QRect(0, self.height() - t_h, min(t_w, self.width()), t_h)
+
+            painter.save()
+            painter.setBrush(QColor(15, 15, 15, 220))
+            painter.setPen(QColor(255, 255, 255, 70))
+            painter.drawRoundedRect(badge_rect, 4, 4)
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, self._name_text)
+            painter.restore()
+
+
 class CameraSettingsDialog(QDialog):
-    """Panel modal de ajustes de cámara previo o durante la grabación."""
+    """Panel modal de ajustes de cámara con vista previa en vivo y fondo virtual instantáneo."""
 
     settings_applied = Signal(CameraSettings)
+    _new_frame_signal = Signal(object)
 
-    def __init__(self, current_settings: CameraSettings, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        current_settings: CameraSettings,
+        camera_source: CameraSource | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.settings = current_settings
-        self.setWindowTitle(f"Configuración de Cámara — {APP_NAME}")
+        self._external_source = camera_source
+        self._local_source: CameraSource | None = None
+        self._bg_image_path: str | None = current_settings.background.image if current_settings.background.mode == "image" else None
+
+        self.setWindowTitle(f"{tr('cam_title')} — {APP_NAME}")
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        self.setMinimumWidth(380)
+        self.setMinimumWidth(440)
+
         self._init_ui()
+        self._setup_camera_feed()
 
     def _init_ui(self) -> None:
-        """Construye los controles de forma, dimensiones, nombre y fondo virtual."""
+        """Construye los controles de forma, dimensiones, nombre, fondo virtual y vista previa."""
         layout = QVBoxLayout(self)
         layout.setSpacing(14)
-        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setContentsMargins(20, 20, 20, 20)
 
         # Título
-        title_label = QLabel("Ajustes de Cámara")
+        title_label = QLabel(tr("cam_header"))
         title_label.setStyleSheet("font-size: 15px; font-weight: bold; color: #FFFFFF;")
         layout.addWidget(title_label)
+
+        # Vista previa en vivo centrada
+        preview_container = QHBoxLayout()
+        preview_container.addStretch()
+        self.preview_canvas = _LivePreviewCanvas(self)
+        self._new_frame_signal.connect(self.preview_canvas.update_frame)
+        preview_container.addWidget(self.preview_canvas)
+        preview_container.addStretch()
+        layout.addLayout(preview_container)
 
         form = QFormLayout()
         form.setSpacing(10)
 
         # 1. Forma
         self.combo_shape = QComboBox()
-        self.combo_shape.addItem("Rectángulo (sin bordes)", "rect")
-        self.combo_shape.addItem("Círculo (sin bordes)", "circle")
+        self.combo_shape.addItem(tr("cam_shape_rect"), "rect")
+        self.combo_shape.addItem(tr("cam_shape_circle"), "circle")
         if self.settings.shape == "circle":
             self.combo_shape.setCurrentIndex(1)
         else:
             self.combo_shape.setCurrentIndex(0)
-        form.addRow("Forma de cámara:", self.combo_shape)
+        self.combo_shape.currentIndexChanged.connect(self._sync_preview_params)
+        form.addRow(tr("cam_shape"), self.combo_shape)
 
-        # 2. Dimensiones en píxeles (ancho x alto)
+        # 2. Dimensiones en píxeles: por defecto 230 ancho x 120 altura
         dim_layout = QHBoxLayout()
         self.spin_width = QSpinBox()
-        self.spin_width.setRange(100, 1920)
-        self.spin_width.setValue(320)
+        self.spin_width.setRange(80, 1920)
+        self.spin_width.setValue(230)
         self.spin_width.setSuffix(" px")
 
         self.spin_height = QSpinBox()
-        self.spin_height.setRange(100, 1080)
-        self.spin_height.setValue(240)
+        self.spin_height.setRange(60, 1080)
+        self.spin_height.setValue(120)
         self.spin_height.setSuffix(" px")
 
-        dim_layout.addWidget(QLabel("Ancho:"))
+        dim_layout.addWidget(QLabel(tr("cam_width")))
         dim_layout.addWidget(self.spin_width)
-        dim_layout.addWidget(QLabel("Alto:"))
+        dim_layout.addWidget(QLabel(tr("cam_height")))
         dim_layout.addWidget(self.spin_height)
-        form.addRow("Tamaño:", dim_layout)
+        form.addRow(tr("cam_size"), dim_layout)
 
         # 3. Nombre del presentador (opcional)
         self.edit_name = QLineEdit()
-        self.edit_name.setPlaceholderText("Opcional (Ej. Tu nombre)")
+        self.edit_name.setPlaceholderText(tr("cam_name_placeholder"))
         if self.settings.name.text:
             self.edit_name.setText(self.settings.name.text)
-        form.addRow("Nombre / Etiqueta:", self.edit_name)
+        self.edit_name.textChanged.connect(self._sync_preview_params)
+        form.addRow(tr("cam_name_label"), self.edit_name)
 
         layout.addLayout(form)
 
-        # 4. Fondo Virtual (estilo Zoom)
-        bg_group = QVBoxLayout()
-        bg_group.setSpacing(6)
-
-        self.chk_virtual_bg = QCheckBox("Habilitar Fondo Virtual")
-        self.chk_virtual_bg.setChecked(self.settings.background.mode == "image")
-
-        bg_path_layout = QHBoxLayout()
-        self.edit_bg_path = QLineEdit()
-        self.edit_bg_path.setReadOnly(True)
-        self.edit_bg_path.setPlaceholderText("Selecciona una imagen de fondo...")
-        if self.settings.background.image:
-            self.edit_bg_path.setText(str(self.settings.background.image))
-
-        self.btn_browse_bg = QPushButton("Examinar...")
+        # 4. Fondo Virtual (Zoom-style)
+        bg_layout = QHBoxLayout()
+        self.btn_browse_bg = QPushButton(tr("cam_browse_bg"))
+        self.btn_browse_bg.setStyleSheet(
+            "background-color: #2D3748; color: #FFFFFF; font-weight: bold; padding: 6px 12px; border-radius: 4px;"
+        )
         self.btn_browse_bg.clicked.connect(self._browse_bg_image)
 
-        bg_path_layout.addWidget(self.edit_bg_path)
-        bg_path_layout.addWidget(self.btn_browse_bg)
+        self.btn_remove_bg = QPushButton(tr("cam_remove_bg"))
+        self.btn_remove_bg.setStyleSheet(
+            "background-color: #4A5568; color: #E2E8F0; padding: 6px 10px; border-radius: 4px;"
+        )
+        self.btn_remove_bg.clicked.connect(self._remove_bg_image)
+        self.btn_remove_bg.setVisible(bool(self._bg_image_path))
 
-        bg_group.addWidget(self.chk_virtual_bg)
-        bg_group.addLayout(bg_path_layout)
-        layout.addLayout(bg_group)
+        bg_layout.addWidget(self.btn_browse_bg)
+        bg_layout.addWidget(self.btn_remove_bg)
+        bg_layout.addStretch()
+        layout.addLayout(bg_layout)
+
+        self.lbl_bg_status = QLabel(
+            f"Fondo activo: {self._bg_image_path}" if self._bg_image_path else ""
+        )
+        self.lbl_bg_status.setStyleSheet("color: #A0AEC0; font-size: 11px;")
+        layout.addWidget(self.lbl_bg_status)
 
         # Botones de Aceptar y Cancelar
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        self.btn_cancel = QPushButton("Cancelar")
+        self.btn_cancel = QPushButton(tr("btn_cancel"))
         self.btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(self.btn_cancel)
 
-        self.btn_accept = QPushButton("Aceptar")
+        self.btn_accept = QPushButton(tr("btn_accept"))
         self.btn_accept.setStyleSheet(
-            "background-color: #007ACC; color: #FFFFFF; font-weight: bold; padding: 6px 14px; border-radius: 4px;"
+            "background-color: #007ACC; color: #FFFFFF; font-weight: bold; padding: 6px 16px; border-radius: 4px;"
         )
         self.btn_accept.clicked.connect(self._on_accept)
         btn_layout.addWidget(self.btn_accept)
 
         layout.addLayout(btn_layout)
 
+        self._sync_preview_params()
+
+    def _setup_camera_feed(self) -> None:
+        """Conecta la fuente de cámara existente o inicia una local para la vista previa."""
+        source = self._external_source
+        if source and source.is_running:
+            source.add_on_frame_callback(self._on_incoming_frame)
+        else:
+            # Iniciar cámara local para previsualización inmediata
+            try:
+                self._local_source = CameraSource(width=640, height=480, fps=25)
+                self._local_source.add_on_frame_callback(self._on_incoming_frame)
+                self._local_source.start()
+            except Exception as e:
+                logger.debug("No se pudo iniciar cámara local en diálogo: %s", e)
+
+    def _on_incoming_frame(self, frame: npt.NDArray[np.uint8]) -> None:
+        """Reenvía el frame al hilo de UI mediante señal Qt."""
+        self._new_frame_signal.emit(frame)
+
+    def _sync_preview_params(self) -> None:
+        """Actualiza los parámetros visuales en el lienzo de previsualización."""
+        shape = str(self.combo_shape.currentData())
+        name = self.edit_name.text().strip()
+        self.preview_canvas.update_settings(shape, name, self._bg_image_path)
+        if self._bg_image_path:
+            self.lbl_bg_status.setText(f"Fondo activo: {self._bg_image_path}")
+            self.btn_remove_bg.setVisible(True)
+        else:
+            self.lbl_bg_status.setText("")
+            self.btn_remove_bg.setVisible(False)
+
     def _browse_bg_image(self) -> None:
         """Abre el explorador de archivos para elegir una imagen de fondo virtual."""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Seleccionar fondo virtual",
+            tr("cam_select_bg_dialog"),
             "",
-            "Imágenes (*.png *.jpg *.jpeg *.bmp *.webp)",
+            tr("cam_image_filter"),
         )
         if file_path:
-            self.edit_bg_path.setText(file_path)
-            self.chk_virtual_bg.setChecked(True)
+            self._bg_image_path = file_path
+            self._sync_preview_params()
+
+    def _remove_bg_image(self) -> None:
+        """Elimina el fondo virtual seleccionado."""
+        self._bg_image_path = None
+        self._sync_preview_params()
 
     def _on_accept(self) -> None:
-        """Guarda y emite los ajustes actualizados."""
-        selected_shape = self.combo_shape.currentData()
+        """Aplica la configuración y cierra el diálogo."""
+        selected_shape = str(self.combo_shape.currentData())
         name_text = self.edit_name.text().strip()
 
-        self.settings.shape = str(selected_shape)
-        self.settings.border.enabled = False  # Sin borde
+        self.settings.shape = selected_shape
+        self.settings.border.enabled = False
         self.settings.name.enabled = bool(name_text)
         self.settings.name.text = name_text
         self.settings.name.position = "bottom_left"
 
-        if self.chk_virtual_bg.isChecked() and self.edit_bg_path.text().strip():
+        if self._bg_image_path:
             self.settings.background.mode = "image"
-            self.settings.background.image = self.edit_bg_path.text().strip()
+            self.settings.background.image = self._bg_image_path
         else:
             self.settings.background.mode = "none"
             self.settings.background.image = None
 
         self.settings_applied.emit(self.settings)
         self.accept()
+
+    def closeEvent(self, event: Any) -> None:  # noqa: N802
+        """Limpia los callbacks y detiene la cámara local al cerrar."""
+        if self._external_source:
+            self._external_source.remove_on_frame_callback(self._on_incoming_frame)
+        if self._local_source:
+            self._local_source.stop()
+            self._local_source = None
+        super().closeEvent(event)

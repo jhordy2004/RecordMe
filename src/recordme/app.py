@@ -35,6 +35,7 @@ from recordme.ui.teleprompter import TeleprompterWidget
 from recordme.ui.teleprompter_editor import TeleprompterEditorDialog
 from recordme.ui.toolbar import FloatingToolbar
 from recordme.utils.geometry import Rect, get_primary_screen_physical_rect, to_logical_pixels
+from recordme.utils.i18n import init_language, tr
 from recordme.utils.logging_setup import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ class RecordMeApp:
     def __init__(self, session_manager: SessionManager, settings: AppSettings) -> None:
         self.session_manager = session_manager
         self.settings = settings
+        init_language(self.settings.language if self.settings.language in ("es", "zh", "en") else None)
         self.platform_services = get_platform_services()
 
         self.controller = RecordingController(session_manager, settings)
@@ -108,10 +110,10 @@ class RecordMeApp:
         self.hotkey_service.zoom_in.connect(self._zoom_in_step)
         self.hotkey_service.zoom_out.connect(self._zoom_out_step)
         self.hotkey_service.zoom_reset.connect(self._zoom_reset)
-        self.hotkey_service.pan_up.connect(lambda: self._pan_step(0.0, -0.06))
-        self.hotkey_service.pan_down.connect(lambda: self._pan_step(0.0, 0.06))
-        self.hotkey_service.pan_left.connect(lambda: self._pan_step(-0.06, 0.0))
-        self.hotkey_service.pan_right.connect(lambda: self._pan_step(0.06, 0.0))
+        self.hotkey_service.pan_up.connect(lambda: self._pan_step(0.0, -0.10))
+        self.hotkey_service.pan_down.connect(lambda: self._pan_step(0.0, 0.10))
+        self.hotkey_service.pan_left.connect(lambda: self._pan_step(-0.10, 0.0))
+        self.hotkey_service.pan_right.connect(lambda: self._pan_step(0.10, 0.0))
 
         self.controller.recording_finished.connect(self._on_recording_finished)
         self.controller.recording_failed.connect(self._on_recording_failed)
@@ -119,7 +121,11 @@ class RecordMeApp:
     def _on_camera_toggled(self, enabled: bool) -> None:
         """Abre el panel de configuración de cámara antes de activarla o la desactiva."""
         if enabled:
-            dialog = CameraSettingsDialog(current_settings=self.settings.camera, parent=self.toolbar)
+            dialog = CameraSettingsDialog(
+                current_settings=self.settings.camera,
+                camera_source=self.controller.camera_source,
+                parent=self.toolbar,
+            )
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 self.controller.apply_camera_settings(self.settings.camera)
                 success = self.controller.set_camera_enabled(True)
@@ -140,7 +146,7 @@ class RecordMeApp:
                     QMessageBox.warning(
                         self.toolbar,
                         APP_NAME,
-                        "No se pudo acceder a la cámara. Comprueba que esté conectada y no esté en uso por otra aplicación.",
+                        tr("recording_error_msg", err="No se pudo acceder a la cámara."),
                     )
             else:
                 self.toolbar.set_camera_enabled(False)
@@ -248,18 +254,16 @@ class RecordMeApp:
         self.session_manager.transition_to(SessionState.IDLE)
 
     def _start_recording(self) -> None:
-        """Inicia el proceso de grabación y arranca el scroll del teleprompter si está activo."""
+        """Inicia el proceso de grabación."""
         success = self.controller.start_recording()
         if success:
             if self.region_frame:
                 self.region_frame.set_recording_state(True)
-            if self.teleprompter_widget and self.teleprompter_widget.isVisible():
-                self.teleprompter_widget.start_scrolling()
         else:
             QMessageBox.critical(
                 self.toolbar,
                 APP_NAME,
-                "No se pudo iniciar la grabación. Consulta los registros de log para más detalles.",
+                tr("recording_error_msg", err="No se pudo iniciar la grabación."),
             )
 
     def _zoom_in_step(self) -> None:
@@ -316,6 +320,7 @@ class RecordMeApp:
         self.controller.set_zoom(self._zoom_level, self._zoom_cx, self._zoom_cy)
         self.toolbar.update_zoom_display(self._zoom_level)
         self.screen_zoom_overlay.set_zoom(self._zoom_level, self._zoom_cx, self._zoom_cy)
+        self.hotkey_service.set_zoom_active(self._zoom_level > 1.01)
 
     def _open_censor_area_selector(self) -> None:
         """Abre el overlay para que el usuario trace interactivamente el área a censurar."""
@@ -396,7 +401,7 @@ class RecordMeApp:
         default_file = output_folder / f"Grabacion_{now_str}.mp4"
 
         # Diálogo nativo modal y sobrepuesto sobre la barra flotante
-        dialog = QFileDialog(self.toolbar, "Guardar grabación", str(default_file), "Video MP4 (*.mp4)")
+        dialog = QFileDialog(self.toolbar, tr("save_dialog_title"), str(default_file), tr("save_dialog_filter"))
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         dialog.setDefaultSuffix("mp4")
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
@@ -470,6 +475,7 @@ class RecordMeApp:
             self.teleprompter_widget.set_script(text)
 
         self.teleprompter_widget.show()
+        self.teleprompter_widget.reset_scroll()
         # Reposicionar la barra flotante abajo para que no colisione con el teleprompter arriba
         self._position_toolbar(at_bottom=True)
         self.toolbar.show()
@@ -538,10 +544,10 @@ class RecordMeApp:
         msg_box = QMessageBox(self.toolbar)
         msg_box.setWindowFlags(msg_box.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         msg_box.setWindowTitle(APP_NAME)
-        msg_box.setText(f"Grabación guardada con éxito:\n\n{output_path.name}")
-        msg_box.setInformativeText(f"Ubicación: {output_path.parent}")
-        open_folder_btn = msg_box.addButton("Abrir carpeta", QMessageBox.ButtonRole.ActionRole)
-        msg_box.addButton("Aceptar", QMessageBox.ButtonRole.AcceptRole)
+        msg_box.setText(tr("recording_finished_title"))
+        msg_box.setInformativeText(tr("recording_finished_msg", path=str(output_path)))
+        open_folder_btn = msg_box.addButton(tr("btn_open_folder"), QMessageBox.ButtonRole.ActionRole)
+        msg_box.addButton(tr("btn_accept"), QMessageBox.ButtonRole.AcceptRole)
         msg_box.raise_()
         msg_box.activateWindow()
         msg_box.exec()
@@ -557,7 +563,7 @@ class RecordMeApp:
         QMessageBox.critical(
             self.toolbar,
             APP_NAME,
-            f"Ocurrió un error durante la grabación:\n{error}",
+            tr("recording_error_msg", err=error),
         )
         if self.session_manager.state == SessionState.ERROR:
             self.session_manager.transition_to(SessionState.IDLE)

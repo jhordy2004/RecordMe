@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from recordme.config.settings import TeleprompterSettings
 from recordme.platform_services.factory import get_platform_services
+from recordme.utils.i18n import tr
 
 logger = logging.getLogger(__name__)
 
@@ -86,13 +87,13 @@ class TeleprompterWidget(QWidget):
         ctrl_bar.setSpacing(8)
 
         # Botón Play / Pause
-        self.btn_play_pause = QPushButton("▶ Iniciar")
+        self.btn_play_pause = QPushButton(tr("tp_float_start"))
         self.btn_play_pause.setStyleSheet(self._button_style("#007ACC", "#0098FF"))
         self.btn_play_pause.clicked.connect(self._toggle_playback)
         ctrl_bar.addWidget(self.btn_play_pause)
 
         # Botón Reiniciar
-        self.btn_rewind = QPushButton("🔄 Inicio")
+        self.btn_rewind = QPushButton(tr("tp_float_restart"))
         self.btn_rewind.setStyleSheet(self._button_style("#333333", "#444444"))
         self.btn_rewind.clicked.connect(self.reset_scroll)
         ctrl_bar.addWidget(self.btn_rewind)
@@ -150,7 +151,7 @@ class TeleprompterWidget(QWidget):
         self._is_scrolling = True
         self._is_paused = False
         self._last_tick_time = time.perf_counter()
-        self.btn_play_pause.setText("⏸ Pausar")
+        self.btn_play_pause.setText(tr("tp_float_pause"))
         self.btn_play_pause.setStyleSheet(self._button_style("#E67E22", "#D35400"))
         if not self._anim_timer.isActive():
             self._anim_timer.start()
@@ -159,20 +160,25 @@ class TeleprompterWidget(QWidget):
     def pause_scrolling(self) -> None:
         """Pausa el avance del texto."""
         self._is_paused = True
-        self.btn_play_pause.setText("▶ Reanudar")
+        self.btn_play_pause.setText(tr("tp_float_resume"))
         self.btn_play_pause.setStyleSheet(self._button_style("#007ACC", "#0098FF"))
 
     def resume_scrolling(self) -> None:
         """Reanuda el avance del texto."""
         self._is_paused = False
         self._last_tick_time = time.perf_counter()
-        self.btn_play_pause.setText("⏸ Pausar")
+        self.btn_play_pause.setText(tr("tp_float_pause"))
         self.btn_play_pause.setStyleSheet(self._button_style("#E67E22", "#D35400"))
 
     def reset_scroll(self) -> None:
         """Reinicia el texto al comienzo."""
         self._scroll_offset_y = 0.0
         self._last_tick_time = time.perf_counter()
+        if not self._is_scrolling or self._is_paused:
+            self._is_scrolling = False
+            self._is_paused = True
+            self.btn_play_pause.setText(tr("tp_float_start"))
+            self.btn_play_pause.setStyleSheet(self._button_style("#007ACC", "#0098FF"))
         self.update()
 
     def _toggle_playback(self) -> None:

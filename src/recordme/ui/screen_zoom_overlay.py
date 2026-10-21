@@ -17,6 +17,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from recordme.platform_services.factory import get_platform_services
+from recordme.utils.i18n import tr
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,7 @@ class ScreenZoomOverlay(QWidget):
 
         # Indicador HUD discreto arriba al centro
         pct = int(round(self._zoom_level * 100))
-        hud_text = f"🔍 Zoom: {pct}%  |  Ctrl+Flechas para mover  |  Ctrl+0 para 100%"
+        hud_text = tr("zoom_hud", pct=pct)
         font = QFont("Segoe UI", 10, QFont.Weight.Bold)
         painter.setFont(font)
         fm = painter.fontMetrics()

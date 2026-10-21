@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 # Transiciones de estado permitidas
 VALID_TRANSITIONS: dict[SessionState, set[SessionState]] = {
-    SessionState.IDLE: {SessionState.CONFIGURING, SessionState.ERROR},
+    SessionState.IDLE: {SessionState.CONFIGURING, SessionState.COUNTDOWN, SessionState.ERROR},
     SessionState.CONFIGURING: {
         SessionState.COUNTDOWN,
         SessionState.RECORDING,
@@ -17,8 +17,18 @@ VALID_TRANSITIONS: dict[SessionState, set[SessionState]] = {
         SessionState.ERROR,
     },
     SessionState.COUNTDOWN: {SessionState.RECORDING, SessionState.IDLE, SessionState.ERROR},
-    SessionState.RECORDING: {SessionState.PAUSED, SessionState.FINALIZING, SessionState.ERROR},
-    SessionState.PAUSED: {SessionState.RECORDING, SessionState.FINALIZING, SessionState.ERROR},
+    SessionState.RECORDING: {
+        SessionState.PAUSED,
+        SessionState.FINALIZING,
+        SessionState.IDLE,
+        SessionState.ERROR,
+    },
+    SessionState.PAUSED: {
+        SessionState.RECORDING,
+        SessionState.FINALIZING,
+        SessionState.IDLE,
+        SessionState.ERROR,
+    },
     SessionState.FINALIZING: {SessionState.DONE, SessionState.ERROR},
     SessionState.DONE: {
         SessionState.IDLE,

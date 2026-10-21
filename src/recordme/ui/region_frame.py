@@ -4,7 +4,7 @@ import logging
 from enum import IntFlag, auto
 from typing import Any
 
-from PySide6.QtCore import QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -68,6 +68,12 @@ class RegionFrameWidget(QWidget):
         self._btn_close_rect = QRect(0, 0, 0, 0)
         self._is_recording = False
         self._is_locked = False
+        self._show_badge = True
+
+        # Temporizador para ocultar el cartel de dimensiones tras 2 segundos
+        self._badge_timer = QTimer(self)
+        self._badge_timer.setSingleShot(True)
+        self._badge_timer.timeout.connect(self._hide_badge)
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
         """Aplica exclusión de captura nativa para que el marco nunca se grabe en el video."""
@@ -80,6 +86,19 @@ class RegionFrameWidget(QWidget):
         self._is_locked = recording
         self.update()
 
+    def _trigger_badge(self) -> None:
+        """Muestra el cartel de dimensiones y reinicia el temporizador de 2 segundos."""
+        self._show_badge = True
+        self._update_mask_and_layout()
+        self.update()
+        self._badge_timer.start(2000)
+
+    def _hide_badge(self) -> None:
+        """Oculta el cartel de dimensiones para dejar el área completamente visible."""
+        self._show_badge = False
+        self._update_mask_and_layout()
+        self.update()
+
     def set_physical_region(self, rect: Rect, dpr: float) -> None:
         """Posiciona y ajusta las dimensiones del marco a partir de coordenadas físicas."""
         self._dpr = dpr if dpr > 0 else 1.0
@@ -89,8 +108,7 @@ class RegionFrameWidget(QWidget):
         log_h = max(self.MIN_SIZE, to_logical_pixels(rect.height, self._dpr))
 
         self.setGeometry(log_x, log_y, log_w, log_h)
-        self._update_mask_and_layout()
-        self.update()
+        self._trigger_badge()
 
     def get_physical_region(self) -> Rect:
         """Obtiene la región actual en píxeles físicos pares."""
@@ -116,15 +134,16 @@ class RegionFrameWidget(QWidget):
         self._header_rect = QRect(header_x, header_y, header_w, header_h)
         self._btn_close_rect = QRect(header_x + header_w - 22, header_y + 2, 20, 20)
 
-        # Máscara: solo los bordes y la insignia reciben eventos de ratón
+        # Máscara: bordes siempre, e insignia solo si está visible
         mask = QRegion()
         # Bordes
         mask = mask.united(QRegion(0, 0, w, b))
         mask = mask.united(QRegion(0, h - b, w, b))
         mask = mask.united(QRegion(0, 0, b, h))
         mask = mask.united(QRegion(w - b, 0, b, h))
-        # Insignia superior
-        mask = mask.united(QRegion(self._header_rect))
+        # Insignia superior (solo cuando _show_badge está activo)
+        if self._show_badge:
+            mask = mask.united(QRegion(self._header_rect))
 
         self.setMask(mask)
 
@@ -161,33 +180,34 @@ class RegionFrameWidget(QWidget):
             painter.drawRect(0, h - corner_size, corner_size, corner_size)
             painter.drawRect(w - corner_size, h - corner_size, corner_size, corner_size)
 
-        # 3. Insignia superior con resolución física
-        phys_rect = self.get_physical_region()
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(20, 20, 20, 230))
-        painter.drawRoundedRect(self._header_rect, 4, 4)
+        # 3. Insignia superior con resolución física (si está activa)
+        if self._show_badge:
+            phys_rect = self.get_physical_region()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(20, 20, 20, 230))
+            painter.drawRoundedRect(self._header_rect, 4, 4)
 
-        # Texto de dimensiones
-        font = QFont("Segoe UI", 9)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.setPen(QColor(255, 255, 255))
+            # Texto de dimensiones
+            font = QFont("Segoe UI", 9)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QColor(255, 255, 255))
 
-        label_rect = QRect(
-            self._header_rect.left() + 6,
-            self._header_rect.top(),
-            self._header_rect.width() - 28,
-            self._header_rect.height(),
-        )
-        status_text = f"Área: {phys_rect.width}×{phys_rect.height}"
-        if self._is_recording:
-            status_text += " [REC]"
-        painter.drawText(label_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, status_text)
+            label_rect = QRect(
+                self._header_rect.left() + 6,
+                self._header_rect.top(),
+                self._header_rect.width() - 28,
+                self._header_rect.height(),
+            )
+            status_text = f"Área: {phys_rect.width}×{phys_rect.height}"
+            if self._is_recording:
+                status_text += " [REC]"
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, status_text)
 
-        # Botón para volver a pantalla completa (✕)
-        if not self._is_locked:
-            painter.setPen(QColor(180, 180, 180))
-            painter.drawText(self._btn_close_rect, Qt.AlignmentFlag.AlignCenter, "✕")
+            # Botón para volver a pantalla completa (✕)
+            if not self._is_locked:
+                painter.setPen(QColor(180, 180, 180))
+                painter.drawText(self._btn_close_rect, Qt.AlignmentFlag.AlignCenter, "✕")
 
     def _determine_edge(self, pos: QPoint) -> ResizeEdge:
         """Determina qué borde o esquina está bajo el cursor."""
@@ -201,7 +221,7 @@ class RegionFrameWidget(QWidget):
         b = self.BORDER_THICKNESS
 
         # Insignia superior para mover
-        if self._header_rect.contains(pos) and not self._btn_close_rect.contains(pos):
+        if self._show_badge and self._header_rect.contains(pos) and not self._btn_close_rect.contains(pos):
             return ResizeEdge.MOVE
 
         edge = ResizeEdge.NONE
@@ -237,7 +257,7 @@ class RegionFrameWidget(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.pos()
             # Clic en el botón cerrar del encabezado para volver a pantalla completa
-            if not self._is_locked and self._btn_close_rect.contains(pos):
+            if self._show_badge and not self._is_locked and self._btn_close_rect.contains(pos):
                 logger.info("El usuario solicitó restablecer a pantalla completa.")
                 self.reset_fullscreen_requested.emit()
                 self.close()
@@ -245,6 +265,7 @@ class RegionFrameWidget(QWidget):
 
             self._active_edge = self._determine_edge(pos)
             if self._active_edge != ResizeEdge.NONE:
+                self._trigger_badge()
                 self._drag_start_pos = event.globalPosition().toPoint()
                 self._drag_start_geom = self.geometry()
                 event.accept()
@@ -257,6 +278,7 @@ class RegionFrameWidget(QWidget):
             self._update_cursor_shape(edge)
             return
 
+        self._trigger_badge()
         delta = event.globalPosition().toPoint() - self._drag_start_pos
         dx = delta.x()
         dy = delta.y()
