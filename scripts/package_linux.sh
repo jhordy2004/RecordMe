@@ -28,13 +28,15 @@ python -m PyInstaller \
     --collect-all "sounddevice" \
     --collect-all "soundfile" \
     --collect-all "pynput" \
+    --hidden-import "pynput.keyboard._xorg" \
+    --hidden-import "pynput.mouse._xorg" \
     --paths "src" \
     "src/recordme/__main__.py"
 
 # 2. Copiar archivos en la estructura AppDir
 cp -r dist/recordme-bin/* "${APP_DIR}/usr/bin/"
 
-# 3. Crear archivo Desktop Entry
+# 3. Crear archivo Desktop Entry y copiar iconos
 cat <<EOF > "${APP_DIR}/recordme.desktop"
 [Desktop Entry]
 Name=RecordMe
@@ -47,6 +49,21 @@ Categories=AudioVideo;Recorder;
 EOF
 
 cp "${APP_DIR}/recordme.desktop" "${APP_DIR}/usr/share/applications/"
+
+# Generar y copiar icono recordme.png en la raíz de AppDir y en hicolor
+if [ -f "src/recordme/resources/ico/recordme.png" ]; then
+    cp "src/recordme/resources/ico/recordme.png" "${APP_DIR}/recordme.png"
+    cp "src/recordme/resources/ico/recordme.png" "${APP_DIR}/usr/share/icons/hicolor/256x256/apps/recordme.png"
+    cp "src/recordme/resources/ico/recordme.png" "${APP_DIR}/.DirIcon"
+else
+    python - <<'EOF'
+from PIL import Image
+img = Image.open("src/recordme/resources/ico/icono_256.ico").convert("RGBA").resize((256, 256))
+img.save("dist/RecordMe.AppDir/recordme.png")
+img.save("dist/RecordMe.AppDir/usr/share/icons/hicolor/256x256/apps/recordme.png")
+img.save("dist/RecordMe.AppDir/.DirIcon")
+EOF
+fi
 
 # 4. Crear AppRun launcher
 cat <<'EOF' > "${APP_DIR}/AppRun"
