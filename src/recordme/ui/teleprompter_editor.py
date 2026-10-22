@@ -3,9 +3,10 @@
 import logging
 import time
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QDialog,
     QDoubleSpinBox,
@@ -25,9 +26,97 @@ from PySide6.QtWidgets import (
 from recordme.config.paths import get_scripts_dir
 from recordme.config.settings import TeleprompterSettings
 from recordme.constants import APP_NAME
+from recordme.platform_services.factory import get_platform_services
 from recordme.utils.i18n import tr
 
 logger = logging.getLogger(__name__)
+
+
+class ContinuousValueSlider(QSlider):
+    """Slider de precisión continua (paso 1 a 1) que sitúa el valor directamente donde se hace clic o arrastra."""
+
+    def __init__(self, min_val: int = 16, max_val: int = 50, parent: QWidget | None = None) -> None:
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        self.setRange(min_val, max_val)
+        self.setSingleStep(1)
+        self.setPageStep(1)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def _coord_to_val(self, x: float) -> int:
+        w = max(1, self.width())
+        pct = max(0.0, min(1.0, x / w))
+        return int(round(self.minimum() + pct * (self.maximum() - self.minimum())))
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            val = self._coord_to_val(event.position().x())
+            self.setValue(val)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            val = self._coord_to_val(event.position().x())
+            self.setValue(val)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+
+class SteppedLinesSlider(QSlider):
+    """Slider de líneas visibles de 20% a 100% con saltos forzados de 20% por paso (1 a 5 líneas)."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        self.setRange(20, 100)
+        self.setSingleStep(20)
+        self.setPageStep(20)
+        self.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.setTickInterval(20)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    @staticmethod
+    def snap_percentage(pct: float) -> int:
+        """Aplica la regla de saltos discretos por tramos de 20%:
+
+        <= 20% -> 20% (1 línea)
+        21% a 40% -> 40% (2 líneas)
+        41% a 60% -> 60% (3 líneas)
+        61% a 80% -> 80% (4 líneas)
+        81% a 100% -> 100% (5 líneas)
+        """
+        if pct <= 20.0:
+            return 20
+        elif pct <= 40.0:
+            return 40
+        elif pct <= 60.0:
+            return 60
+        elif pct <= 80.0:
+            return 80
+        else:
+            return 100
+
+    def _coord_to_snapped_val(self, x: float) -> int:
+        w = max(1, self.width())
+        pct = max(0.0, min(100.0, (x / w) * 100.0))
+        return self.snap_percentage(pct)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            val = self._coord_to_snapped_val(event.position().x())
+            self.setValue(val)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            val = self._coord_to_snapped_val(event.position().x())
+            self.setValue(val)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
 
 
 class TeleprompterEditorDialog(QDialog):
@@ -54,6 +143,7 @@ class TeleprompterEditorDialog(QDialog):
         self._sub_pixel_scroll = 0.0
 
         self.setWindowTitle(f"{tr('tp_title')} — {APP_NAME}")
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         self.resize(740, 580)
         self.setMinimumSize(620, 500)
 
@@ -69,16 +159,18 @@ class TeleprompterEditorDialog(QDialog):
 
         # Barra superior con botones de guion
         top_bar = QHBoxLayout()
-        title_label = QLabel(tr("tp_header"))
-        title_label.setStyleSheet("font-size: 15px; font-weight: bold; color: #FFFFFF;")
+        title_label = QLabel(tr("tp_title"))
+        title_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #E0E0E0;")
         top_bar.addWidget(title_label)
         top_bar.addStretch()
 
         self.btn_open = QPushButton(tr("tp_open_txt"))
+        self.btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_open.clicked.connect(self._open_file)
         top_bar.addWidget(self.btn_open)
 
         self.btn_save_script = QPushButton(tr("tp_save_script"))
+        self.btn_save_script.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_save_script.clicked.connect(self._save_file)
         top_bar.addWidget(self.btn_save_script)
 
@@ -109,6 +201,7 @@ class TeleprompterEditorDialog(QDialog):
         # 1. Velocidad en Segundos por línea (1.0s a 8.0s)
         sec_box = QHBoxLayout()
         self.sec_slider = QSlider(Qt.Orientation.Horizontal)
+        self.sec_slider.setCursor(Qt.CursorShape.PointingHandCursor)
         self.sec_slider.setRange(10, 80)
         initial_tenths = int(self.settings.seconds_per_line * 10)
         self.sec_slider.setValue(max(10, min(initial_tenths, 80)))
@@ -127,13 +220,13 @@ class TeleprompterEditorDialog(QDialog):
         sec_box.addWidget(self.sec_spin)
         form_layout.addRow(tr("tp_speed"), sec_box)
 
-        # 2. Tamaño de fuente
+        # 2. Tamaño de fuente (de 16 a 50 px, de 1 en 1 sin saltos de página)
         font_box = QHBoxLayout()
-        self.font_slider = QSlider(Qt.Orientation.Horizontal)
-        self.font_slider.setRange(16, 50)
+        self.font_slider = ContinuousValueSlider(16, 50)
         self.font_slider.setValue(self.settings.font_size)
         self.font_spin = QSpinBox()
         self.font_spin.setRange(16, 50)
+        self.font_spin.setSingleStep(1)
         self.font_spin.setValue(self.settings.font_size)
         self.font_spin.setSuffix(" px")
         self.font_slider.valueChanged.connect(self.font_spin.setValue)
@@ -143,17 +236,20 @@ class TeleprompterEditorDialog(QDialog):
         font_box.addWidget(self.font_spin)
         form_layout.addRow(tr("tp_font_size"), font_box)
 
-        # 3. Líneas visibles
+        # 3. Líneas visibles (1 a 5 líneas con saltos escalonados del 20%)
         lines_box = QHBoxLayout()
-        self.lines_slider = QSlider(Qt.Orientation.Horizontal)
-        self.lines_slider.setRange(1, 3)
-        self.lines_slider.setValue(self.settings.lines_visible)
+        self.lines_slider = SteppedLinesSlider()
+        init_lines = max(1, min(5, self.settings.lines_visible))
+        self.lines_slider.setValue(init_lines * 20)
+
         self.lines_spin = QSpinBox()
-        self.lines_spin.setRange(1, 3)
-        self.lines_spin.setValue(self.settings.lines_visible)
+        self.lines_spin.setRange(1, 5)
+        self.lines_spin.setValue(init_lines)
         self.lines_spin.setSuffix(f" {tr('tp_lines_suffix')}")
-        self.lines_slider.valueChanged.connect(self.lines_spin.setValue)
-        self.lines_spin.valueChanged.connect(self.lines_slider.setValue)
+
+        self.lines_slider.valueChanged.connect(self._on_lines_slider_changed)
+        self.lines_spin.valueChanged.connect(self._on_lines_spin_changed)
+
         lines_box.addWidget(self.lines_slider, stretch=1)
         lines_box.addWidget(self.lines_spin)
         form_layout.addRow(tr("tp_lines_visible"), lines_box)
@@ -161,6 +257,7 @@ class TeleprompterEditorDialog(QDialog):
         # 4. Opacidad
         opacity_box = QHBoxLayout()
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setCursor(Qt.CursorShape.PointingHandCursor)
         self.opacity_slider.setRange(30, 100)
         self.opacity_slider.setValue(int(self.settings.opacity * 100))
         self.opacity_spin = QSpinBox()
@@ -178,6 +275,7 @@ class TeleprompterEditorDialog(QDialog):
         # Botones inferiores de acción
         btn_layout = QHBoxLayout()
         self.btn_test = QPushButton(tr("tp_test"))
+        self.btn_test.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_test.setStyleSheet(
             "background-color: #2E7D32; color: #FFFFFF; font-weight: bold; padding: 8px 18px; border-radius: 6px;"
         )
@@ -187,10 +285,12 @@ class TeleprompterEditorDialog(QDialog):
         btn_layout.addStretch()
 
         self.btn_cancel = QPushButton(tr("btn_cancel"))
+        self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_cancel.clicked.connect(self._on_cancel_clicked)
         btn_layout.addWidget(self.btn_cancel)
 
         self.btn_apply = QPushButton(tr("tp_apply"))
+        self.btn_apply.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_apply.setStyleSheet(
             "background-color: #007ACC; color: #FFFFFF; font-weight: bold; padding: 8px 22px; border-radius: 6px;"
         )
@@ -198,6 +298,28 @@ class TeleprompterEditorDialog(QDialog):
         btn_layout.addWidget(self.btn_apply)
 
         layout.addLayout(btn_layout)
+
+    def _on_lines_slider_changed(self, val: int) -> None:
+        """Asegura el enganche exacto al 20%, 40%, 60%, 80% o 100% y actualiza el spinbox."""
+        snapped = SteppedLinesSlider.snap_percentage(val)
+        if val != snapped:
+            self.lines_slider.blockSignals(True)
+            self.lines_slider.setValue(snapped)
+            self.lines_slider.blockSignals(False)
+        lines = max(1, min(5, snapped // 20))
+        if self.lines_spin.value() != lines:
+            self.lines_spin.blockSignals(True)
+            self.lines_spin.setValue(lines)
+            self.lines_spin.blockSignals(False)
+
+    def _on_lines_spin_changed(self, lines: int) -> None:
+        """Sincroniza el slider al valor porcentual correspondiente a la cantidad de líneas."""
+        lines = max(1, min(5, lines))
+        target_pct = lines * 20
+        if self.lines_slider.value() != target_pct:
+            self.lines_slider.blockSignals(True)
+            self.lines_slider.setValue(target_pct)
+            self.lines_slider.blockSignals(False)
 
     def _update_editor_font(self) -> None:
         """Aplica el tamaño de letra seleccionado directamente al editor de texto."""
@@ -274,28 +396,86 @@ class TeleprompterEditorDialog(QDialog):
             if self._sub_pixel_scroll > max_scroll:
                 self._sub_pixel_scroll = 0.0
             sb.setValue(int(self._sub_pixel_scroll))
+
+    def _extract_text_from_file(self, file_path: Path) -> str | None:
+        """Extrae texto de archivos .txt, .docx y .doc con fallbacks resilientes."""
+        suffix = file_path.suffix.lower()
+
+        if suffix == ".docx":
+            # 1. Intentar con python-docx si está disponible
+            try:
+                import docx
+                doc = docx.Document(str(file_path))
+                paras = [p.text for p in doc.paragraphs if p.text.strip()]
+                if paras:
+                    return "\n\n".join(paras)
+            except Exception as e:
+                logger.debug("Fallo lectura con python-docx: %s, probando parseo XML nativo...", e)
+
+            # 2. Fallback nativo: descompresión ZIP y lectura de word/document.xml
+            try:
+                import xml.etree.ElementTree as ET
+                import zipfile
+
+                with zipfile.ZipFile(str(file_path)) as z:
+                    xml_content = z.read("word/document.xml")
+                    tree = ET.fromstring(xml_content)
+                    paras = []
+                    for elem in tree.iter():
+                        if elem.tag.endswith("}p"):
+                            texts = [node.text for node in elem.iter() if node.tag.endswith("}t") and node.text]
+                            line = "".join(texts).strip()
+                            if line:
+                                paras.append(line)
+                    if paras:
+                        return "\n\n".join(paras)
+            except Exception as e:
+                logger.error("No se pudo extraer texto del archivo .docx: %s", e)
+                return None
+
+        elif suffix == ".doc":
+            # Para archivos .doc binarios heredados, extraer texto legible
+            try:
+                raw_bytes = file_path.read_bytes()
+                text = raw_bytes.decode("latin-1", errors="ignore")
+                cleaned = "".join(ch if (ch.isalnum() or ch in " \n\r\t.,;:?!-()\"'") else " " for ch in text)
+                lines = [line.strip() for line in cleaned.splitlines() if len(line.strip()) > 3]
+                if lines:
+                    return "\n\n".join(lines)
+            except Exception as e:
+                logger.error("No se pudo extraer texto del archivo .doc: %s", e)
+                return None
+
         else:
-            # Si no hay scroll suficiente, avanzar suavemente
-            pass
+            # Archivo de texto (.txt)
+            for enc in ("utf-8", "utf-8-sig", "latin-1", "cp1252"):
+                try:
+                    return file_path.read_text(encoding=enc)
+                except (UnicodeDecodeError, Exception):
+                    continue
+
+        return None
 
     def _open_file(self) -> None:
-        """Abre un diálogo para cargar un archivo de texto .txt."""
+        """Abre un diálogo para cargar un archivo de texto .txt o Word (.docx, .doc)."""
+        filter_str = (
+            "Documentos soportados (*.txt *.docx *.doc);;"
+            "Archivos de texto (*.txt);;"
+            "Documentos de Word (*.docx *.doc);;"
+            "Todos los archivos (*.*)"
+        )
         path, _ = QFileDialog.getOpenFileName(
             self,
             tr("tp_open_txt"),
             str(get_scripts_dir()),
-            "Archivos de texto (*.txt);;Todos los archivos (*.*)",
+            filter_str,
         )
         if path:
-            try:
-                content = Path(path).read_text(encoding="utf-8")
-                self.text_edit.setPlainText(content)
-            except Exception:
-                try:
-                    content = Path(path).read_text(encoding="latin-1")
-                    self.text_edit.setPlainText(content)
-                except Exception as e:
-                    logger.error("No se pudo leer el archivo: %s", e)
+            text = self._extract_text_from_file(Path(path))
+            if text is not None:
+                self.text_edit.setPlainText(text)
+            else:
+                logger.warning("No se pudo extraer texto del archivo: %s", path)
 
     def _save_file(self) -> None:
         """Guarda el guion actual como archivo .txt."""
@@ -340,7 +520,9 @@ class TeleprompterEditorDialog(QDialog):
             self.text_edit.setPlainText(settings.last_script)
         self.sec_spin.setValue(settings.seconds_per_line)
         self.font_spin.setValue(settings.font_size)
-        self.lines_spin.setValue(settings.lines_visible)
+        lines = max(1, min(5, settings.lines_visible))
+        self.lines_spin.setValue(lines)
+        self.lines_slider.setValue(lines * 20)
         self.opacity_spin.setValue(int(settings.opacity * 100))
         self._update_stats()
         self._update_editor_font()
@@ -357,6 +539,14 @@ class TeleprompterEditorDialog(QDialog):
         settings = self.get_current_settings()
         self.settings_applied.emit(text, settings)
         self.accept()
+
+    def showEvent(self, event: Any) -> None:  # noqa: N802
+        """Excluye el editor de teleprompter de la captura de pantalla."""
+        super().showEvent(event)
+        try:
+            get_platform_services().exclude_window_from_capture(self)
+        except Exception as e:
+            logger.debug("No se pudo excluir TeleprompterEditorDialog de la captura: %s", e)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         """Asegura detener el timer al cerrar."""

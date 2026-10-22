@@ -2,6 +2,7 @@
 
 import logging
 from enum import IntFlag, auto
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -11,6 +12,7 @@ from PySide6.QtGui import (
     QCursor,
     QFont,
     QImage,
+    QKeyEvent,
     QMouseEvent,
     QPainter,
     QPainterPath,
@@ -49,6 +51,7 @@ class CameraPreviewWidget(QWidget):
     """Burbuja flotante de cámara en pantalla con redimensionamiento de bordes y arrastre libre."""
 
     layout_updated = Signal(CameraLayout)
+    close_requested = Signal()
 
     BORDER_GRAB = 8
     MIN_SIZE = 80
@@ -76,6 +79,7 @@ class CameraPreviewWidget(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
 
         self._update_geometry_from_layout()
 
@@ -87,13 +91,18 @@ class CameraPreviewWidget(QWidget):
     def update_frame(self, frame_bgr: npt.NDArray[np.uint8]) -> None:
         """Recibe un nuevo fotograma BGR de la cámara, aplica fondo virtual si existe y actualiza el pixmap."""
         try:
+            if not self.isVisible() or frame_bgr is None or frame_bgr.size == 0:
+                return
             processed_frame = frame_bgr
             if self.layout_config.virtual_bg_image:
                 processed_frame = CameraSegmenter.get_instance().apply_background(
                     frame_bgr, self.layout_config.virtual_bg_image
                 )
             h, w = processed_frame.shape[:2]
-            qimg = QImage(processed_frame.data, w, h, w * 3, QImage.Format.Format_BGR888)
+            if not processed_frame.flags["C_CONTIGUOUS"]:
+                processed_frame = np.ascontiguousarray(processed_frame)
+            bytes_per_line = int(processed_frame.strides[0]) if processed_frame.ndim >= 2 else w * 3
+            qimg = QImage(processed_frame.data, w, h, bytes_per_line, QImage.Format.Format_BGR888)
             self._current_pixmap = QPixmap.fromImage(qimg.copy())
             self.update()
         except Exception as e:
@@ -199,6 +208,23 @@ class CameraPreviewWidget(QWidget):
         self._active_edge = BoxEdge.NONE
         self._sync_normalized_position()
         event.accept()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        """Cierra la vista previa si se presiona la tecla Escape.
+
+        Nota: La tecla 'C' es administrada globalmente por GlobalHotkeyService para evitar
+        dobles ejecuciones y condiciones de carrera concurrentes.
+        """
+        if event.key() == Qt.Key.Key_Escape:
+            self.close_requested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event: Any) -> None:  # noqa: N802
+        """Limpia el pixmap al cerrar para liberar memoria de forma segura."""
+        self._current_pixmap = None
+        super().closeEvent(event)
 
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
         """Permite redimensionar proporcionalmente con la rueda del ratón."""

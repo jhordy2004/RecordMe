@@ -5,6 +5,7 @@ from typing import Any
 
 from PySide6.QtCore import QPoint, QRect, Qt, Signal
 from PySide6.QtGui import (
+    QCloseEvent,
     QColor,
     QCursor,
     QGuiApplication,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import QWidget
 
 from recordme.platform_services.factory import get_platform_services
 from recordme.utils.geometry import Rect, to_physical_pixels
+from recordme.utils.i18n import tr
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +41,14 @@ class RegionSelectorOverlay(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setMouseTracking(True)
         self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
 
         self._start_pos: QPoint | None = None
         self._current_pos: QPoint | None = None
         self._is_drawing = False
+        self._confirmed = False
 
         # Cubrir la pantalla primaria
         primary_screen = QGuiApplication.primaryScreen()
@@ -85,10 +89,12 @@ class RegionSelectorOverlay(QWidget):
             # Información de resolución
             phys_w = to_physical_pixels(selection_rect.width(), self._dpr)
             phys_h = to_physical_pixels(selection_rect.height(), self._dpr)
-            info_text = f"{phys_w} × {phys_h} px (Enter: confirmar, Esc: cancelar)"
+            info_text = tr("region_selector_dimensions", w=phys_w, h=phys_h)
 
-            # Fondo para el cartelito
-            text_rect = QRect(selection_rect.left(), max(0, selection_rect.top() - 28), 240, 24)
+            # Fondo dinámico para el cartelito según la longitud del texto
+            font_metrics = painter.fontMetrics()
+            text_w = max(240, font_metrics.horizontalAdvance(info_text) + 24)
+            text_rect = QRect(selection_rect.left(), max(0, selection_rect.top() - 28), text_w, 24)
             painter.fillRect(text_rect, QColor(20, 20, 20, 220))
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, info_text)
@@ -98,7 +104,7 @@ class RegionSelectorOverlay(QWidget):
             painter.drawText(
                 self.rect(),
                 Qt.AlignmentFlag.AlignCenter,
-                "Haz clic y arrastra para seleccionar el área a grabar.\n(Enter: pantalla completa | Esc: cancelar)",
+                tr("region_selector_guide"),
             )
 
     def _get_current_rect(self) -> QRect | None:
@@ -108,7 +114,12 @@ class RegionSelectorOverlay(QWidget):
         return QRect(self._start_pos, self._current_pos).normalized()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        """Inicia el trazado del rectángulo."""
+        """Inicia el trazado con clic izquierdo o cancela la selección con clic derecho."""
+        if event.button() == Qt.MouseButton.RightButton:
+            logger.info("Selección de área cancelada por clic derecho.")
+            self.close()
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self._start_pos = event.pos()
             self._current_pos = event.pos()
@@ -134,6 +145,7 @@ class RegionSelectorOverlay(QWidget):
 
     def _confirm_rect(self, selected: QRect | None) -> None:
         """Calcula el Rect en píxeles físicos pares, emite la señal y cierra el overlay."""
+        self._confirmed = True
         if selected is None or selected.width() < 10 or selected.height() < 10:
             # Pantalla completa por defecto si no dibujó nada
             primary_screen = QGuiApplication.primaryScreen()
@@ -163,7 +175,14 @@ class RegionSelectorOverlay(QWidget):
         """Maneja atajos de teclado Enter (confirmar) y Esc (cancelar)."""
         if event.key() == Qt.Key.Key_Escape:
             logger.info("Selección de área cancelada por el usuario.")
-            self.selection_canceled.emit()
             self.close()
+            event.accept()
         elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self._confirm_rect(self._get_current_rect())
+            event.accept()
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        """Garantiza la emisión de cancelación y limpieza si no fue confirmada."""
+        if not self._confirmed:
+            self.selection_canceled.emit()
+        super().closeEvent(event)

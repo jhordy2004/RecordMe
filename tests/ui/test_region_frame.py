@@ -88,3 +88,37 @@ def test_region_frame_recording_lock(qtbot: QtBot) -> None:
     # Al intentar arrastrar un borde bloqueado no debe cambiar de edge
     edge = frame._determine_edge(QPoint(398, 150))
     assert edge == ResizeEdge.NONE
+
+
+def test_region_close_button_outside_area_and_click(qtbot: QtBot) -> None:
+    """Verifica que el botón '✕' se sitúe afuera del área y que al pulsar elimine el área."""
+    frame = RegionFrameWidget()
+    qtbot.addWidget(frame)
+    qtbot.addWidget(frame._close_btn)
+
+    rect = Rect(100, 100, 400, 300)
+    frame.set_physical_region(rect, dpr=1.0)
+    frame.show()
+
+    assert frame._close_btn.isVisible()
+
+    # El botón debe estar estrictamente AFUERA del área seleccionada
+    btn_geom = frame._close_btn.geometry()
+    frame_geom = frame.geometry()
+    is_outside = (btn_geom.bottom() < frame_geom.top()) or (btn_geom.top() > frame_geom.bottom())
+    assert is_outside, f"El botón está dentro del área: btn={btn_geom}, frame={frame_geom}"
+
+    # Al hacer clic en el botón '✕' debe emitir la señal para eliminar el marco y restablecer a pantalla completa
+    reset_emitted = False
+
+    def on_reset() -> None:
+        nonlocal reset_emitted
+        reset_emitted = True
+
+    frame.reset_fullscreen_requested.connect(on_reset)
+
+    # Simular clic en el botón de cerrar
+    frame._close_btn.clicked.emit()
+    assert reset_emitted is True
+    assert not frame.isVisible()
+

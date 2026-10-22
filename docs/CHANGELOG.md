@@ -1,5 +1,53 @@
 # Registro de Cambios (CHANGELOG)
 
+## [Fase 6: Empaquetado Windows (PyInstaller + Inno Setup)] - 2026-10-22
+
+### Agregado
+- **Compilación PyInstaller Dual (OneFile y OneDir)**:
+  - Archivo `recordme.spec` para bundling automático de todas las dependencias nativas (PySide6, OpenCV, DXCam, PortAudio/sounddevice, imageio_ffmpeg, pynput, docx).
+  - Integración del ejecutable FFmpeg dentro del paquete congelado mediante `ffmpeg_locator.py` resiliente a rutas `_MEIPASS`.
+  - Iconos multirresolución (16x16 a 256x256) embebidos y fijados en la barra de tareas de Windows 11.
+  - Modelo ONNX `selfie_segmentation.onnx` embebido para fondo virtual en tiempo real sin conexión a internet.
+  - **Ejecutable OneFile Portátil (`Release/RecordMe.exe`)**: Doble clic y ejecución inmediata sin instalar nada.
+  - **Distribución Zipeada (`Release/RecordMe-v0.1.0-windows-x64.zip`)**: Paquete portable con arranque instantáneo.
+- **Instalador Profesional Inno Setup 6 (`installer.iss`)**:
+  - Compilación automática con `ISCC.exe` generando `Release/RecordMe_Setup_v0.1.0.exe`.
+  - Soporte multilingüe (Español / Inglés).
+  - Instalación limpia por usuario (`PrivilegesRequired=lowest`), accesos directos opcionales en Escritorio y Menú Inicio, y desinstalador completo.
+- **Script Orquestador de Compilación**:
+  - `build_release.ps1`: Automatiza la generación de binarios, compresión ZIP, compilación de Inno Setup y cálculo de sumas de verificación SHA256, replicando en la carpeta `Release/` (y `Relase/`).
+
+---
+
+## [Fase 7: Soporte macOS y ScreenCaptureKit] - 2026-10-22
+
+### Agregado
+- **Servicios de Plataforma para macOS (`MacOSPlatformServices`)**:
+  - Exclusión nativa de ventanas propias (barra flotante, marco de región, teleprompter) registrada mediante `CGWindowID` / `winId()`.
+  - Comprobación y solicitud proactiva de permisos del sistema operativo mediante APIs Cocoa/CoreGraphics (`CGPreflightScreenCaptureAccess`, `CGRequestScreenCaptureAccess`), Accesibilidad para atajos (`AXIsProcessTrusted`) y AVFoundation para cámara/micrófono.
+- **Backend de Captura ScreenCaptureKit (`MacOSScreenCaptureKitBackend`)**:
+  - Flujo de captura acelerado por hardware en macOS 12.3+ / 13+ (Ventura y Sonoma).
+  - Uso de filtros `SCContentFilter(display: excludingWindows: excluded_window_ids)` que omiten automáticamente las herramientas de RecordMe del video final a nivel de compositor Quartz.
+  - Fallback transparente a `MSSCaptureBackend` en entornos heredados.
+- **Empaquetado para macOS**:
+  - Script `scripts/package_macos.sh` que genera el bundle `RecordMe.app` firmado ad-hoc con descripciones de privacidad en `Info.plist` y genera la imagen montable `RecordMe-0.1.0-macOS.dmg`.
+
+---
+
+## [Fase 8: Soporte Linux X11 y Wayland con Estrategia Fuera del Área] - 2026-10-22
+
+### Agregado
+- **Servicios de Plataforma para Linux (`LinuxPlatformServices`)**:
+  - Detección automática del servidor gráfico (`X11` vs `Wayland` vía `XDG_SESSION_TYPE`).
+  - **Estrategia de Colocación Fuera del Área (`reposition_outside_region`)**: Al no existir en X11 un análogo directo de `WDA_EXCLUDEFROMCAPTURE`, la aplicación reposiciona automáticamente la barra flotante y el teleprompter fuera del rectángulo delimitador grabado.
+  - Notificaciones en la interfaz informando sobre limitaciones del servidor gráfico y recomendaciones de grabación por área o monitor secundario.
+- **Backend de Captura Linux (`LinuxX11CaptureBackend`)**:
+  - Captura optimizada mediante memoria compartida XShm / MSS y soporte experimental para portales Wayland.
+- **Empaquetado AppImage**:
+  - Script `scripts/package_linux.sh` y estructura `AppDir` con archivo `recordme.desktop` y lanzador `AppRun` para distribución como `RecordMe-0.1.0-x86_64.AppImage`.
+
+---
+
 ## [Fase 3: Teleprompter Invisible y Editor] - 2026-10-20
 
 ### Agregado

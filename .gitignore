@@ -48,3 +48,12 @@ temp_*/
 *.mp4
 output/
 recordings/
+
+# Release outputs & large binaries
+Release/
+Relase/
+*.exe
+*.zip
+*.dmg
+*.AppImage
+

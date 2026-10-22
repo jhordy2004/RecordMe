@@ -5,11 +5,12 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtCore import QEvent, QRect, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
     QImage,
+    QKeyEvent,
     QPainter,
     QPainterPath,
     QPaintEvent,
@@ -33,9 +34,21 @@ from recordme.camera.camera_source import CameraSource
 from recordme.camera.segmenter import CameraSegmenter
 from recordme.config.settings import CameraSettings
 from recordme.constants import APP_NAME
+from recordme.platform_services.factory import get_platform_services
+from recordme.resources import get_app_icon
 from recordme.utils.i18n import tr
 
 logger = logging.getLogger(__name__)
+
+
+class _SafeComboBox(QComboBox):
+    """QComboBox que ignora pulsaciones de teclas reservadas para atajos globales como C."""
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_C:
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class _LivePreviewCanvas(QWidget):
@@ -59,11 +72,16 @@ class _LivePreviewCanvas(QWidget):
     def update_frame(self, frame_bgr: npt.NDArray[np.uint8]) -> None:
         """Recibe el fotograma BGR de la cámara, aplica fondo virtual si existe y repinta."""
         try:
+            if frame_bgr is None or frame_bgr.size == 0:
+                return
             processed = frame_bgr
             if self._bg_path:
                 processed = CameraSegmenter.get_instance().apply_background(frame_bgr, self._bg_path)
             h, w = processed.shape[:2]
-            qimg = QImage(processed.data, w, h, w * 3, QImage.Format.Format_BGR888)
+            if not processed.flags["C_CONTIGUOUS"]:
+                processed = np.ascontiguousarray(processed)
+            bytes_per_line = int(processed.strides[0]) if processed.ndim >= 2 else w * 3
+            qimg = QImage(processed.data, w, h, bytes_per_line, QImage.Format.Format_BGR888)
             self._current_pixmap = QPixmap.fromImage(qimg.copy())
             self.update()
         except Exception as e:
@@ -142,6 +160,9 @@ class CameraSettingsDialog(QDialog):
         self._bg_image_path: str | None = current_settings.background.image if current_settings.background.mode == "image" else None
 
         self.setWindowTitle(f"{tr('cam_title')} — {APP_NAME}")
+        app_icon = get_app_icon()
+        if not app_icon.isNull():
+            self.setWindowIcon(app_icon)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         self.setMinimumWidth(440)
 
@@ -172,7 +193,7 @@ class CameraSettingsDialog(QDialog):
         form.setSpacing(10)
 
         # 1. Forma
-        self.combo_shape = QComboBox()
+        self.combo_shape = _SafeComboBox()
         self.combo_shape.addItem(tr("cam_shape_rect"), "rect")
         self.combo_shape.addItem(tr("cam_shape_circle"), "circle")
         if self.settings.shape == "circle":
@@ -216,9 +237,11 @@ class CameraSettingsDialog(QDialog):
         self.btn_browse_bg.setStyleSheet(
             "background-color: #2D3748; color: #FFFFFF; font-weight: bold; padding: 6px 12px; border-radius: 4px;"
         )
+        self.btn_browse_bg.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_browse_bg.clicked.connect(self._browse_bg_image)
 
         self.btn_remove_bg = QPushButton(tr("cam_remove_bg"))
+        self.btn_remove_bg.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_remove_bg.setStyleSheet(
             "background-color: #4A5568; color: #E2E8F0; padding: 6px 10px; border-radius: 4px;"
         )
@@ -241,10 +264,12 @@ class CameraSettingsDialog(QDialog):
         btn_layout.addStretch()
 
         self.btn_cancel = QPushButton(tr("btn_cancel"))
+        self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(self.btn_cancel)
 
         self.btn_accept = QPushButton(tr("btn_accept"))
+        self.btn_accept.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_accept.setStyleSheet(
             "background-color: #007ACC; color: #FFFFFF; font-weight: bold; padding: 6px 16px; border-radius: 4px;"
         )
@@ -253,7 +278,33 @@ class CameraSettingsDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
+        # Proteger combo_shape y el diálogo contra el atajo C para no alternar a circular involuntariamente
+        self.combo_shape.installEventFilter(self)
+        self.installEventFilter(self)
+        self.btn_accept.setFocus()
+
         self._sync_preview_params()
+
+    def eventFilter(self, watched: Any, event: Any) -> bool:  # noqa: N802
+        """Filtra y absorbe la tecla 'C' para evitar que modifique los controles o cambie la forma."""
+        if event.type() == QEvent.Type.KeyPress:
+            if isinstance(event, QKeyEvent) and event.key() == Qt.Key.Key_C:
+                # Si el foco está en el campo de texto del nombre, permitir escribir la 'c'
+                if hasattr(self, "edit_name") and self.edit_name.hasFocus():
+                    return False
+                # En cualquier otro control (incluyendo combo_shape) o en el diálogo, bloquear 'c'
+                return True
+        return super().eventFilter(watched, event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        """Evita que presionar la tecla C altere la forma seleccionada o cierre el diálogo."""
+        if event.key() == Qt.Key.Key_C:
+            if hasattr(self, "edit_name") and self.edit_name.hasFocus():
+                super().keyPressEvent(event)
+                return
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _setup_camera_feed(self) -> None:
         """Conecta la fuente de cámara existente o inicia una local para la vista previa."""
@@ -270,8 +321,11 @@ class CameraSettingsDialog(QDialog):
                 logger.debug("No se pudo iniciar cámara local en diálogo: %s", e)
 
     def _on_incoming_frame(self, frame: npt.NDArray[np.uint8]) -> None:
-        """Reenvía el frame al hilo de UI mediante señal Qt."""
-        self._new_frame_signal.emit(frame)
+        """Reenvía el frame al hilo de UI mediante señal Qt de forma segura."""
+        try:
+            self._new_frame_signal.emit(frame.copy())
+        except Exception:
+            pass
 
     def _sync_preview_params(self) -> None:
         """Actualiza los parámetros visuales en el lienzo de previsualización."""
@@ -323,11 +377,35 @@ class CameraSettingsDialog(QDialog):
         self.settings_applied.emit(self.settings)
         self.accept()
 
+    def _cleanup_camera(self) -> None:
+        """Limpia los callbacks y detiene la cámara local inmediatamente."""
+        if self._external_source:
+            try:
+                self._external_source.remove_on_frame_callback(self._on_incoming_frame)
+            except Exception:
+                pass
+        if self._local_source:
+            try:
+                self._local_source.remove_on_frame_callback(self._on_incoming_frame)
+                self._local_source.stop()
+            except Exception:
+                pass
+            self._local_source = None
+
+    def showEvent(self, event: Any) -> None:  # noqa: N802
+        """Excluye el diálogo de configuración de la captura de pantalla para que no se grabe."""
+        super().showEvent(event)
+        try:
+            get_platform_services().exclude_window_from_capture(self)
+        except Exception as e:
+            logger.debug("No se pudo excluir CameraSettingsDialog de la captura: %s", e)
+
+    def done(self, r: int) -> None:
+        """Asegura la liberación inmediata del hardware de cámara antes de cerrar el diálogo."""
+        self._cleanup_camera()
+        super().done(r)
+
     def closeEvent(self, event: Any) -> None:  # noqa: N802
         """Limpia los callbacks y detiene la cámara local al cerrar."""
-        if self._external_source:
-            self._external_source.remove_on_frame_callback(self._on_incoming_frame)
-        if self._local_source:
-            self._local_source.stop()
-            self._local_source = None
+        self._cleanup_camera()
         super().closeEvent(event)

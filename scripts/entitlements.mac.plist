@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Permiso de hardware de Cámara -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <!-- Permiso de hardware de Micrófono -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <!-- Ejecución de código JIT y ctypes para PySide6 y OpenCV -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- Automatización de eventos AppleEvents para atajos globales -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>

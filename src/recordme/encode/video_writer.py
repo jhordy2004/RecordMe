@@ -2,6 +2,7 @@
 
 import logging
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -71,6 +72,15 @@ class VideoWriter:
         ]
 
         logger.info("Lanzando FFmpeg: %s", " ".join(cmd))
+        creationflags = 0
+        startupinfo = None
+        if sys.platform == "win32":
+            # Prevenir que aparezca una ventana de consola para FFmpeg
+            creationflags = subprocess.CREATE_NO_WINDOW
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0  # SW_HIDE
+
         try:
             self._process = subprocess.Popen(
                 cmd,
@@ -78,6 +88,8 @@ class VideoWriter:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 bufsize=10**7,
+                creationflags=creationflags,
+                startupinfo=startupinfo,
             )
             self._is_open = True
             self._frames_written = 0

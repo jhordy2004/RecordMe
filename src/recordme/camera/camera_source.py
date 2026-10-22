@@ -56,12 +56,16 @@ class CameraSource:
         """Abre la cámara e inicia el hilo de captura continuo."""
         try:
             backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
-            self._cap = cv2.VideoCapture(self.device_index, backend)
-            if not self._cap.isOpened():
-                # Reintentar sin backend específico
-                self._cap = cv2.VideoCapture(self.device_index)
+            # Intentar abrir la cámara con reintentos suaves si el hardware acaba de ser liberado
+            for attempt in range(3):
+                self._cap = cv2.VideoCapture(self.device_index, backend)
+                if not self._cap.isOpened():
+                    self._cap = cv2.VideoCapture(self.device_index)
+                if self._cap.isOpened():
+                    break
+                time.sleep(0.12)
 
-            if not self._cap.isOpened():
+            if self._cap is None or not self._cap.isOpened():
                 logger.warning("No se pudo abrir el dispositivo de cámara con índice %d", self.device_index)
                 return False
 

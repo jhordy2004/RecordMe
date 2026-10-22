@@ -1,0 +1,174 @@
+name: Build and Release Multiplatform Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - master
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # --------------------------------------------------------------------------
+  # 1. WINDOWS: Genera RecordMe.exe (OneFile), ZIP (OneDir) y Setup Inno Setup
+  # --------------------------------------------------------------------------
+  build-windows:
+    name: Build Windows Packages
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip install pyinstaller
+
+      - name: Install Inno Setup
+        run: |
+          choco install innosetup --yes
+
+      - name: Compile Windows Packages
+        shell: powershell
+        run: |
+          .\build_release.ps1
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            Release/RecordMe.exe
+            Release/RecordMe-v0.1.0-windows-x64.zip
+            Release/RecordMe_Setup_v0.1.0.exe
+
+  # --------------------------------------------------------------------------
+  # 2. MACOS: Genera RecordMe.app y RecordMe-v0.1.0-macOS.dmg
+  # --------------------------------------------------------------------------
+  build-macos:
+    name: Build macOS Application (.app & .dmg)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip install pyinstaller
+
+      - name: Build macOS Bundle and DMG
+        run: |
+          chmod +x scripts/package_macos.sh
+          ./scripts/package_macos.sh
+
+      - name: Zip .app bundle
+        run: |
+          cd dist
+          zip -r ../Release/RecordMe-macOS.app.zip RecordMe.app
+          cd ..
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: |
+            Release/*.dmg
+            Release/*.zip
+
+  # --------------------------------------------------------------------------
+  # 3. LINUX: Genera RecordMe.AppImage
+  # --------------------------------------------------------------------------
+  build-linux:
+    name: Build Linux AppImage
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-glx libegl1-mesa libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xfixes0 libasound2-dev libportaudio2 fuse libfuse2 file wget
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip install pyinstaller
+
+      - name: Build AppImage
+        run: |
+          chmod +x scripts/package_linux.sh
+          ./scripts/package_linux.sh
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          path: |
+            Release/*.AppImage
+
+  # --------------------------------------------------------------------------
+  # 4. GITHUB RELEASE: Publica automáticamente los binarios cuando se crea un Tag
+  # --------------------------------------------------------------------------
+  release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: release-assets/windows
+
+      - name: Download macOS Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-release
+          path: release-assets/macos
+
+      - name: Download Linux Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-release
+          path: release-assets/linux
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/windows/*
+            release-assets/macos/*
+            release-assets/linux/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true

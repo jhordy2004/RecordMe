@@ -3,6 +3,7 @@
 import logging
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import imageio_ffmpeg
@@ -11,7 +12,25 @@ logger = logging.getLogger(__name__)
 
 
 def get_ffmpeg_exe() -> str:
-    """Devuelve la ruta ejecutable a FFmpeg, priorizando imageio-ffmpeg o el PATH del sistema."""
+    """Devuelve la ruta ejecutable a FFmpeg, priorizando bundle congelado, imageio-ffmpeg o PATH."""
+    # 0. Probar directorio empaquetado PyInstaller (sys._MEIPASS) o directorio del ejecutable
+    if getattr(sys, "frozen", False):
+        base_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        candidates = [
+            base_dir / "imageio_ffmpeg" / "binaries",
+            base_dir / "binaries",
+            base_dir,
+            Path(sys.executable).parent,
+            Path(sys.executable).parent / "imageio_ffmpeg" / "binaries",
+        ]
+        for c in candidates:
+            if c.exists():
+                for pattern in ("ffmpeg*.exe", "ffmpeg*"):
+                    found = [f for f in c.glob(pattern) if f.is_file() and not f.name.startswith("ffprobe")]
+                    if found:
+                        logger.debug("FFmpeg detectado en bundle congelado: %s", found[0])
+                        return str(found[0])
+
     # 1. Probar imageio-ffmpeg
     try:
         exe = imageio_ffmpeg.get_ffmpeg_exe()
@@ -33,6 +52,21 @@ def get_ffmpeg_exe() -> str:
 
 def get_ffprobe_exe() -> str:
     """Devuelve la ruta ejecutable a FFprobe o al del sistema."""
+    if getattr(sys, "frozen", False):
+        base_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        candidates = [
+            base_dir / "imageio_ffmpeg" / "binaries",
+            base_dir / "binaries",
+            base_dir,
+            Path(sys.executable).parent,
+        ]
+        for c in candidates:
+            if c.exists():
+                for pattern in ("ffprobe*.exe", "ffprobe*"):
+                    found = [f for f in c.glob(pattern) if f.is_file()]
+                    if found:
+                        return str(found[0])
+
     system_ffprobe = shutil.which("ffprobe")
     if system_ffprobe:
         return system_ffprobe

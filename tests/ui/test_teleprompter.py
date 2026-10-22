@@ -51,6 +51,7 @@ def test_teleprompter_editor_dialog(qtbot: QtBot) -> None:
     dialog.show()
 
     assert dialog.isVisible()
+    assert dialog.windowTitle() == "Teleprompter — RecordMe"
     assert "5 palabras" in dialog.stats_label.text()
 
     # Modificar texto
@@ -72,3 +73,34 @@ def test_teleprompter_editor_dialog(qtbot: QtBot) -> None:
     new_settings = dialog.get_current_settings()
     assert new_settings.seconds_per_line == 3.5
     assert "seis" in new_settings.last_script
+
+
+def test_teleprompter_font_slider_continuous(qtbot: QtBot) -> None:
+    """Verifica que el slider de fuente sea continuo de 16 a 50 con paso de 1 en 1."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    from recordme.ui.teleprompter_editor import ContinuousValueSlider
+
+    slider = ContinuousValueSlider(16, 50)
+    qtbot.addWidget(slider)
+    slider.resize(340, 30)
+    slider.show()
+
+    assert slider.minimum() == 16
+    assert slider.maximum() == 50
+    assert slider.singleStep() == 1
+
+    # Clic a mitad del slider (debe colocarse en torno a 33 px)
+    mid_x = slider.width() / 2.0
+    press_event = QMouseEvent(
+        QMouseEvent.Type.MouseButtonPress,
+        QPoint(int(mid_x), 15),
+        QPoint(int(mid_x), 15),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    slider.mousePressEvent(press_event)
+    assert 32 <= slider.value() <= 34
+

@@ -27,19 +27,38 @@ def create_capture_backend() -> CaptureBackend:
         except Exception as e:
             logger.info("dxcam no disponible en este entorno (%s). Probando fallbacks...", e)
 
-    # 2. Intentar mss
+    # 2. En macOS, usar backend ScreenCaptureKit con exclusión por SCContentFilter
+    if sys.platform == "darwin":
+        try:
+            from recordme.capture.macos_screencapturekit import MacOSScreenCaptureKitBackend
+
+            logger.info("Usando backend de captura ScreenCaptureKit en macOS.")
+            return MacOSScreenCaptureKitBackend()
+        except Exception as e:
+            logger.info("ScreenCaptureKit no disponible (%s). Probando fallbacks...", e)
+
+    # 3. En Linux, usar backend X11/Wayland con MSS/XShm
+    if sys.platform.startswith("linux"):
+        try:
+            from recordme.capture.linux_x11 import LinuxX11CaptureBackend
+
+            logger.info("Usando backend de captura LinuxX11CaptureBackend.")
+            return LinuxX11CaptureBackend()
+        except Exception as e:
+            logger.info("Backend Linux no disponible (%s). Probando fallbacks...", e)
+
+    # 4. Fallback estándar multiplataforma: mss
     try:
         import mss
         mss_cls = getattr(mss, "MSS", mss.mss)
         with mss_cls() as sct:
             if len(sct.monitors) > 0:
-                # Verificar grab de prueba
                 sct.grab(sct.monitors[0])
                 logger.info("Usando backend de captura MSS.")
                 return MSSCaptureBackend()
     except Exception as e:
         logger.info("mss no disponible o restringido (%s). Usando fallback QtScreenCaptureBackend...", e)
 
-    # 3. Fallback universal garantizado: QtScreenCaptureBackend
+    # 5. Fallback universal garantizado: QtScreenCaptureBackend
     logger.info("Usando backend de captura QtScreenCaptureBackend.")
     return QtScreenCaptureBackend()

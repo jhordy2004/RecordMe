@@ -4,22 +4,28 @@ import logging
 from enum import IntFlag, auto
 from typing import Any
 
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, Qt, Signal
 from PySide6.QtGui import (
+    QCloseEvent,
     QColor,
     QCursor,
     QFont,
+    QHideEvent,
+    QKeyEvent,
     QMouseEvent,
+    QMoveEvent,
     QPainter,
     QPaintEvent,
     QPen,
     QRegion,
+    QResizeEvent,
     QShowEvent,
 )
 from PySide6.QtWidgets import QWidget
 
 from recordme.platform_services.factory import get_platform_services
 from recordme.utils.geometry import Rect, to_logical_pixels, to_physical_pixels
+from recordme.utils.i18n import tr
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +43,83 @@ class ResizeEdge(IntFlag):
     BOTTOM_LEFT = BOTTOM | LEFT
     BOTTOM_RIGHT = BOTTOM | RIGHT
     MOVE = auto()
+
+
+class RegionCloseButton(QWidget):
+    """Botón flotante '✕' situado fuera del área de captura para eliminar el área definida."""
+
+    clicked = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.platform_services = get_platform_services()
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFixedSize(26, 26)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(tr("btn_delete_region"))
+        self._is_hovered = False
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Escape:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        self.platform_services.exclude_window_from_capture(self)
+
+    def enterEvent(self, event: Any) -> None:  # noqa: N802
+        self._is_hovered = True
+        self.update()
+
+    def leaveEvent(self, event: Any) -> None:  # noqa: N802
+        self._is_hovered = False
+        self.update()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Fondo circular: rojo al hacer hover, gris oscuro translúcido normalmente
+        bg_color = QColor(229, 9, 20) if self._is_hovered else QColor(25, 25, 25, 225)
+        border_color = QColor(255, 255, 255, 200) if self._is_hovered else QColor(80, 80, 80, 220)
+
+        painter.setBrush(bg_color)
+        painter.setPen(QPen(border_color, 1.5))
+        painter.drawEllipse(1, 1, 23, 23)
+
+        # Letra '✕' centrada
+        painter.setPen(QColor(255, 255, 255))
+        font = QFont("Segoe UI", 10)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "✕")
+
+    def update_position(self, frame_geom: QRect) -> None:
+        """Posiciona el botón fuera del área: justo encima de la esquina superior derecha."""
+        btn_w = self.width()
+        btn_h = self.height()
+
+        x = frame_geom.right() - btn_w + 1
+        y = frame_geom.top() - btn_h - 4
+
+        # Si se sale por la parte superior de la pantalla, colocarlo justo debajo del marco
+        if y < 0:
+            y = frame_geom.bottom() + 4
+
+        self.move(x, y)
 
 
 class RegionFrameWidget(QWidget):
@@ -58,45 +141,65 @@ class RegionFrameWidget(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
 
         self._dpr: float = 1.0
         self._active_edge: ResizeEdge = ResizeEdge.NONE
         self._drag_start_pos: QPoint | None = None
         self._drag_start_geom: QRect | None = None
-        self._header_rect = QRect(0, 0, 0, 0)
-        self._btn_close_rect = QRect(0, 0, 0, 0)
         self._is_recording = False
         self._is_locked = False
-        self._show_badge = True
 
-        # Temporizador para ocultar el cartel de dimensiones tras 2 segundos
-        self._badge_timer = QTimer(self)
-        self._badge_timer.setSingleShot(True)
-        self._badge_timer.timeout.connect(self._hide_badge)
+        # Botón '✕' situado afuera del área para eliminar el área definida
+        self._close_btn = RegionCloseButton()
+        self._close_btn.clicked.connect(self._on_close_clicked)
+
+    def _on_close_clicked(self) -> None:
+        """Elimina el área definida y solicita restablecer a pantalla completa."""
+        logger.info("El usuario solicitó eliminar el área y restablecer a pantalla completa.")
+        self.reset_fullscreen_requested.emit()
+        self.close()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        """Cancela y restablece a pantalla completa si el usuario presiona Esc fuera de grabación."""
+        if event.key() == Qt.Key.Key_Escape and not self._is_recording:
+            logger.info("Tecla Esc presionada en el marco: eliminando selección de área.")
+            self._on_close_clicked()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
         """Aplica exclusión de captura nativa para que el marco nunca se grabe en el video."""
         super().showEvent(event)
         self.platform_services.exclude_window_from_capture(self)
+        if not self._is_locked:
+            self._close_btn.show()
+            self._close_btn.update_position(self.geometry())
+
+    def hideEvent(self, event: QHideEvent) -> None:  # noqa: N802
+        super().hideEvent(event)
+        self._close_btn.hide()
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        self._close_btn.close()
+        super().closeEvent(event)
+
+    def moveEvent(self, event: QMoveEvent) -> None:  # noqa: N802
+        super().moveEvent(event)
+        self._close_btn.update_position(self.geometry())
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        """Reconstruye la máscara cuando cambia el tamaño del marco."""
+        super().resizeEvent(event)
+        self._update_mask_and_layout()
 
     def set_recording_state(self, recording: bool) -> None:
-        """Bloquea el redimensionamiento durante la grabación para proteger el flujo FFmpeg."""
+        """Bloquea el redimensionado y oculta el botón de eliminar área durante la grabación."""
         self._is_recording = recording
         self._is_locked = recording
-        self.update()
-
-    def _trigger_badge(self) -> None:
-        """Muestra el cartel de dimensiones y reinicia el temporizador de 2 segundos."""
-        self._show_badge = True
-        self._update_mask_and_layout()
-        self.update()
-        self._badge_timer.start(2000)
-
-    def _hide_badge(self) -> None:
-        """Oculta el cartel de dimensiones para dejar el área completamente visible."""
-        self._show_badge = False
-        self._update_mask_and_layout()
+        self._close_btn.setVisible(not recording and self.isVisible())
         self.update()
 
     def set_physical_region(self, rect: Rect, dpr: float) -> None:
@@ -108,7 +211,10 @@ class RegionFrameWidget(QWidget):
         log_h = max(self.MIN_SIZE, to_logical_pixels(rect.height, self._dpr))
 
         self.setGeometry(log_x, log_y, log_w, log_h)
-        self._trigger_badge()
+        self._update_mask_and_layout()
+        if self.isVisible() and not self._is_locked:
+            self._close_btn.show()
+            self._close_btn.update_position(self.geometry())
 
     def get_physical_region(self) -> Rect:
         """Obtiene la región actual en píxeles físicos pares."""
@@ -121,39 +227,23 @@ class RegionFrameWidget(QWidget):
         ).to_even()
 
     def _update_mask_and_layout(self) -> None:
-        """Actualiza la máscara del widget para que el interior sea pasante para clics."""
+        """Actualiza la máscara del widget para que el interior sea completamente pasante para clics."""
         w = self.width()
         h = self.height()
         b = self.BORDER_THICKNESS
 
-        # Insignia de título superior (dimensiones e icono para pantalla completa)
-        header_w = min(220, max(140, w - 40))
-        header_h = 24
-        header_x = (w - header_w) // 2
-        header_y = 0
-        self._header_rect = QRect(header_x, header_y, header_w, header_h)
-        self._btn_close_rect = QRect(header_x + header_w - 22, header_y + 2, 20, 20)
-
-        # Máscara: bordes siempre, e insignia solo si está visible
+        # Máscara solo sobre los bordes perimetrales: el interior queda 100% pasante
         mask = QRegion()
-        # Bordes
         mask = mask.united(QRegion(0, 0, w, b))
         mask = mask.united(QRegion(0, h - b, w, b))
         mask = mask.united(QRegion(0, 0, b, h))
         mask = mask.united(QRegion(w - b, 0, b, h))
-        # Insignia superior (solo cuando _show_badge está activo)
-        if self._show_badge:
-            mask = mask.united(QRegion(self._header_rect))
 
         self.setMask(mask)
-
-    def resizeEvent(self, event: Any) -> None:  # noqa: N802
-        """Reconstruye la máscara cuando cambia el tamaño del marco."""
-        super().resizeEvent(event)
-        self._update_mask_and_layout()
+        self._close_btn.update_position(self.geometry())
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
-        """Dibuja el borde visible de captura, esquinas de ajuste e insignia superior."""
+        """Dibuja únicamente el borde perimetral y los marcadores de esquinas sin tapar el interior."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -174,40 +264,10 @@ class RegionFrameWidget(QWidget):
             corner_size = 8
             painter.setBrush(border_color)
             painter.setPen(Qt.PenStyle.NoPen)
-            # Esquinas
             painter.drawRect(0, 0, corner_size, corner_size)
             painter.drawRect(w - corner_size, 0, corner_size, corner_size)
             painter.drawRect(0, h - corner_size, corner_size, corner_size)
             painter.drawRect(w - corner_size, h - corner_size, corner_size, corner_size)
-
-        # 3. Insignia superior con resolución física (si está activa)
-        if self._show_badge:
-            phys_rect = self.get_physical_region()
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(20, 20, 20, 230))
-            painter.drawRoundedRect(self._header_rect, 4, 4)
-
-            # Texto de dimensiones
-            font = QFont("Segoe UI", 9)
-            font.setBold(True)
-            painter.setFont(font)
-            painter.setPen(QColor(255, 255, 255))
-
-            label_rect = QRect(
-                self._header_rect.left() + 6,
-                self._header_rect.top(),
-                self._header_rect.width() - 28,
-                self._header_rect.height(),
-            )
-            status_text = f"Área: {phys_rect.width}×{phys_rect.height}"
-            if self._is_recording:
-                status_text += " [REC]"
-            painter.drawText(label_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, status_text)
-
-            # Botón para volver a pantalla completa (✕)
-            if not self._is_locked:
-                painter.setPen(QColor(180, 180, 180))
-                painter.drawText(self._btn_close_rect, Qt.AlignmentFlag.AlignCenter, "✕")
 
     def _determine_edge(self, pos: QPoint) -> ResizeEdge:
         """Determina qué borde o esquina está bajo el cursor."""
@@ -219,10 +279,6 @@ class RegionFrameWidget(QWidget):
         w = self.width()
         h = self.height()
         b = self.BORDER_THICKNESS
-
-        # Insignia superior para mover
-        if self._show_badge and self._header_rect.contains(pos) and not self._btn_close_rect.contains(pos):
-            return ResizeEdge.MOVE
 
         edge = ResizeEdge.NONE
         if x <= b:
@@ -256,16 +312,8 @@ class RegionFrameWidget(QWidget):
         """Inicia el arrastre de redimensionamiento o movimiento del marco."""
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.pos()
-            # Clic en el botón cerrar del encabezado para volver a pantalla completa
-            if self._show_badge and not self._is_locked and self._btn_close_rect.contains(pos):
-                logger.info("El usuario solicitó restablecer a pantalla completa.")
-                self.reset_fullscreen_requested.emit()
-                self.close()
-                return
-
             self._active_edge = self._determine_edge(pos)
             if self._active_edge != ResizeEdge.NONE:
-                self._trigger_badge()
                 self._drag_start_pos = event.globalPosition().toPoint()
                 self._drag_start_geom = self.geometry()
                 event.accept()
@@ -273,12 +321,11 @@ class RegionFrameWidget(QWidget):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         """Actualiza la forma del cursor o redimensiona/mueve el marco."""
         if self._drag_start_pos is None or self._drag_start_geom is None or self._active_edge == ResizeEdge.NONE:
-            # Solo actualizar cursor en hover
-            edge = self._determine_edge(event.pos())
+            pos = event.pos()
+            edge = self._determine_edge(pos)
             self._update_cursor_shape(edge)
             return
 
-        self._trigger_badge()
         delta = event.globalPosition().toPoint() - self._drag_start_pos
         dx = delta.x()
         dy = delta.y()
@@ -310,6 +357,7 @@ class RegionFrameWidget(QWidget):
                 new_h = max(self.MIN_SIZE, orig.height() + dy)
 
         self.setGeometry(new_x, new_y, new_w, new_h)
+        self._close_btn.update_position(self.geometry())
         self.region_changed.emit(self.get_physical_region())
         event.accept()
 
@@ -319,5 +367,6 @@ class RegionFrameWidget(QWidget):
             self._drag_start_pos = None
             self._drag_start_geom = None
             self._active_edge = ResizeEdge.NONE
+            self._close_btn.update_position(self.geometry())
             self.region_changed.emit(self.get_physical_region())
             event.accept()

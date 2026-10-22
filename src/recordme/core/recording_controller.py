@@ -128,8 +128,8 @@ class RecordingController(QObject):
                 name_position=self._camera_layout.name_position,
                 virtual_bg_image=self._camera_layout.virtual_bg_image,
             )
-            # Si no se está grabando, podemos detener el dispositivo para ahorrar energía
-            if self.session_manager.state != SessionState.RECORDING and self._camera_source:
+            # Detener el dispositivo de cámara para apagar el sensor y la luz LED
+            if self._camera_source is not None:
                 self._camera_source.stop()
                 self._camera_source = None
 
@@ -217,7 +217,12 @@ class RecordingController(QObject):
 
     def start_recording(self) -> bool:
         """Inicia el pipeline de grabación."""
-        if self.session_manager.state not in (SessionState.IDLE, SessionState.CONFIGURING, SessionState.DONE):
+        if self.session_manager.state not in (
+            SessionState.IDLE,
+            SessionState.CONFIGURING,
+            SessionState.COUNTDOWN,
+            SessionState.DONE,
+        ):
             logger.warning("No se puede iniciar grabación desde estado: %s", self.session_manager.state.name)
             return False
 

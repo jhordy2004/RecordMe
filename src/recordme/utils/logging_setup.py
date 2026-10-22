@@ -40,11 +40,15 @@ def setup_logging(debug: bool = False) -> logging.Logger:
     file_handler.setLevel(logging.DEBUG if debug else logging.INFO)
     root_logger.addHandler(file_handler)
 
-    # Handler de consola
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    console_handler.setLevel(logging.DEBUG if debug else logging.INFO)
-    root_logger.addHandler(console_handler)
+    # Handler de consola (solo si stdout está conectado a una consola real)
+    if sys.stdout is not None:
+        try:
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setFormatter(formatter)
+            console_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+            root_logger.addHandler(console_handler)
+        except Exception:
+            pass
 
     logger = logging.getLogger(APP_NAME)
     logger.info("Sistema de logging inicializado. Archivo de log: %s", log_file)

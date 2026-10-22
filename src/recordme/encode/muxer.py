@@ -2,6 +2,7 @@
 
 import logging
 import subprocess
+import sys
 from pathlib import Path
 
 from recordme.encode.ffmpeg_locator import get_ffmpeg_exe
@@ -64,12 +65,23 @@ class Muxer:
             ]
 
         logger.info("Ejecutando Muxer: %s", " ".join(cmd))
+        creationflags = 0
+        startupinfo = None
+        if sys.platform == "win32":
+            # Prevenir ventana de consola emergente para FFmpeg muxer
+            creationflags = subprocess.CREATE_NO_WINDOW
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0  # SW_HIDE
+
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 check=False,
                 timeout=60.0,
+                creationflags=creationflags,
+                startupinfo=startupinfo,
             )
             if result.returncode == 0 and output_mp4.exists() and output_mp4.stat().st_size > 0:
                 logger.info("Muxer finalizado exitosamente: %s (tamaño: %d bytes)", output_mp4, output_mp4.stat().st_size)

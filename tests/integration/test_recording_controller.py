@@ -76,3 +76,26 @@ def test_recording_controller_consecutive_runs(qtbot: QtBot, tmp_path: Path) -> 
     with qtbot.waitSignal(controller.recording_finished, timeout=10000):
         controller.stop_recording()
     assert session_manager.state.name == "DONE"
+
+
+def test_recording_controller_start_from_countdown(qtbot: QtBot, tmp_path: Path) -> None:
+    """Verifica que el controlador inicie la grabación correctamente desde el estado COUNTDOWN."""
+    from recordme.core.events import SessionState
+
+    session_manager = SessionManager()
+    session_manager.transition_to(SessionState.COUNTDOWN)
+
+    settings = AppSettings()
+    settings.output.folder = str(tmp_path)
+    settings.output.fps = 20
+
+    controller = RecordingController(session_manager, settings)
+    controller.set_region(Rect(0, 0, 320, 240))
+
+    assert controller.start_recording() is True
+    assert session_manager.state == SessionState.RECORDING
+    qtbot.wait(400)
+    with qtbot.waitSignal(controller.recording_finished, timeout=10000):
+        controller.stop_recording()
+    assert session_manager.state == SessionState.DONE
+

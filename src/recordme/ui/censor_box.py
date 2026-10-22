@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QWidget
 
 from recordme.platform_services.factory import get_platform_services
 from recordme.utils.geometry import Rect, to_physical_pixels
+from recordme.utils.i18n import tr
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class CensorBoxWidget(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
 
         self._active_edge = BoxEdge.NONE
         self._drag_start_pos: QPoint | None = None
@@ -152,7 +154,7 @@ class CensorBoxWidget(QWidget):
         elif edge == BoxEdge.MOVE:
             self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
         else:
-            self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+            self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         """Maneja clics para cerrar, cambiar modo o iniciar arrastre."""
@@ -264,15 +266,15 @@ class CensorBoxWidget(QWidget):
         if self.mode == "blur":
             accent = QColor(0, 180, 255)
             bg = QColor(0, 80, 140, 140)
-            mode_text = "Desenfoque"
+            mode_text = tr("censor_mode_blur")
         elif self.mode == "pixelate":
             accent = QColor(168, 85, 247)
             bg = QColor(100, 30, 160, 140)
-            mode_text = "Pixelado"
+            mode_text = tr("censor_mode_pixelate")
         else:
             accent = QColor(255, 75, 75)
             bg = QColor(20, 20, 20, 210)
-            mode_text = "Sólido"
+            mode_text = tr("censor_mode_solid")
 
         # Fondo translúcido
         painter.setBrush(bg)
@@ -314,4 +316,5 @@ class CensorBoxWidget(QWidget):
             painter.setPen(QColor(255, 255, 255, 180))
             font_body = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
             painter.setFont(font_body)
-            painter.drawText(center_rect, Qt.AlignmentFlag.AlignCenter, f"✛ {mode_text}\n(Arrastra para mover)")
+            drag_msg = tr("censor_drag_to_move")
+            painter.drawText(center_rect, Qt.AlignmentFlag.AlignCenter, f"✛ {mode_text}\n{drag_msg}")

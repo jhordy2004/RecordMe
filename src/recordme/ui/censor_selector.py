@@ -5,6 +5,7 @@ from typing import Any
 
 from PySide6.QtCore import QPoint, QRect, Qt, Signal
 from PySide6.QtGui import (
+    QCloseEvent,
     QColor,
     QCursor,
     QFont,
@@ -18,6 +19,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from recordme.platform_services.factory import get_platform_services
+from recordme.utils.i18n import tr
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +40,14 @@ class CensorAreaSelectorOverlay(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setMouseTracking(True)
         self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
 
         self._start_pos: QPoint | None = None
         self._current_pos: QPoint | None = None
         self._is_drawing = False
+        self._confirmed = False
 
         primary_screen = QGuiApplication.primaryScreen()
         if primary_screen:
@@ -58,7 +62,12 @@ class CensorAreaSelectorOverlay(QWidget):
         self.platform_services.exclude_window_from_capture(self)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        """Inicia el trazado del área de censura."""
+        """Inicia el trazado del área de censura o cancela con clic derecho."""
+        if event.button() == Qt.MouseButton.RightButton:
+            logger.info("Trazado de censura cancelado por clic derecho.")
+            self.close()
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self._start_pos = event.pos()
             self._current_pos = event.pos()
@@ -82,18 +91,24 @@ class CensorAreaSelectorOverlay(QWidget):
                 # Exigir un tamaño mínimo de 30x30 para evitar clics accidentales
                 if selected_rect.width() >= 30 and selected_rect.height() >= 30:
                     logger.info("Área de censura trazada: %s", selected_rect)
+                    self._confirmed = True
                     self.close()
                     self.area_selected.emit(selected_rect)
                     return
 
             self.close()
-            self.selection_canceled.emit()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         """Cancela con tecla Escape."""
         if event.key() == Qt.Key.Key_Escape:
             self.close()
+            event.accept()
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        """Emite cancelación si se cierra la ventana sin haber trazado."""
+        if not self._confirmed:
             self.selection_canceled.emit()
+        super().closeEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
         """Pinta la máscara oscura y resalta el área trazada en color azul cian."""
@@ -117,7 +132,7 @@ class CensorAreaSelectorOverlay(QWidget):
             painter.drawRect(rect)
 
             # Dimensiones
-            info_text = f"Censura: {rect.width()}×{rect.height()} px"
+            info_text = tr("censor_selector_dimensions", w=rect.width(), h=rect.height())
             painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
             painter.setPen(QColor(0, 229, 255))
             painter.drawText(rect.x() + 6, max(20, rect.y() - 6), info_text)
@@ -128,5 +143,5 @@ class CensorAreaSelectorOverlay(QWidget):
             painter.drawText(
                 self.rect(),
                 Qt.AlignmentFlag.AlignCenter,
-                "Haz clic y arrastra para definir el área que deseas censurar\n(Presiona Escape para cancelar)",
+                tr("censor_selector_guide"),
             )

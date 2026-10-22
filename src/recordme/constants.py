@@ -4,7 +4,7 @@ from typing import Final
 
 # Nombre de la aplicación (centralizado en una sola constante)
 APP_NAME: Final[str] = "RecordMe"
-APP_DISPLAY_NAME: Final[str] = "RecordMe — Screen Recorder"
+APP_DISPLAY_NAME: Final[str] = "RecordMe"
 APP_VERSION: Final[str] = "0.1.0"
 
 # Identificador de organización para directorios de sistema

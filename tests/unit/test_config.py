@@ -9,7 +9,7 @@ from recordme.config.settings import AppSettings
 def test_default_settings() -> None:
     """Verifica que la configuración por defecto tenga valores válidos."""
     settings = AppSettings()
-    assert settings.language == "es"
+    assert settings.language == "auto"
     assert settings.output.fps == 30
     assert settings.audio.mic_enabled is True
     assert settings.camera.enabled is False
@@ -36,7 +36,7 @@ def test_corrupted_json_fallback(tmp_path: Path) -> None:
 
     loaded = AppSettings.load(config_file)
     assert loaded.output.fps == 30
-    assert loaded.language == "es"
+    assert loaded.language == "auto"
 
 
 def test_partial_json_fallback(tmp_path: Path) -> None:

@@ -90,7 +90,7 @@ class TeleprompterSettings:
     opacity: float = 0.78
     width_pct: int = 60
     position_x: float = 0.5
-    position_y: float = 0.06
+    position_y: float = 0.12
     mirror_text: bool = False
     countdown: bool = True
     last_script: str = ""
@@ -135,7 +135,7 @@ class HotkeySettings:
 @dataclass
 class AppSettings:
     """Configuración raíz de RecordMe."""
-    language: str = "es"
+    language: str = "auto"
     output: OutputSettings = field(default_factory=OutputSettings)
     audio: AudioSettings = field(default_factory=AudioSettings)
     camera: CameraSettings = field(default_factory=CameraSettings)
@@ -183,7 +183,11 @@ class AppSettings:
         if not isinstance(data, dict):
             return instance
 
-        instance.language = str(data.get("language", instance.language))
+        raw_lang = data.get("language")
+        if raw_lang in ("auto", "system", None) or raw_lang == "es":
+            instance.language = "auto"
+        else:
+            instance.language = str(raw_lang)
 
         # Output
         if isinstance(data.get("output"), dict):
@@ -251,7 +255,7 @@ class AppSettings:
                 font_size=int(tp.get("font_size", instance.teleprompter.font_size)),
                 wpm=int(tp.get("wpm", instance.teleprompter.wpm)),
                 seconds_per_line=float(tp.get("seconds_per_line", instance.teleprompter.seconds_per_line)),
-                lines_visible=int(tp.get("lines_visible", instance.teleprompter.lines_visible)),
+                lines_visible=max(1, min(5, int(tp.get("lines_visible", instance.teleprompter.lines_visible)))),
                 opacity=float(tp.get("opacity", instance.teleprompter.opacity)),
                 width_pct=int(tp.get("width_pct", instance.teleprompter.width_pct)),
                 position_x=float(tp.get("position_x", instance.teleprompter.position_x)),

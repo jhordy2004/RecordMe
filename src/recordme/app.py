@@ -1,20 +1,23 @@
 """Punto de entrada de la aplicación RecordMe, inicialización de Qt y servicios."""
 
 import logging
+import shutil
 import sys
 import uuid
-from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QRect, Qt, QUrl
-from PySide6.QtGui import QColor, QCursor, QDesktopServices, QPalette
+from PySide6.QtCore import QEvent, QObject, QRect, Qt
+from PySide6.QtGui import QColor, QCursor, QPalette
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QApplication,
     QDialog,
     QFileDialog,
     QMessageBox,
+    QPushButton,
 )
 
+from recordme.config.paths import get_default_recordings_dir
 from recordme.config.settings import AppSettings, TeleprompterSettings
 from recordme.constants import APP_DISPLAY_NAME, APP_NAME, APP_VERSION
 from recordme.core.events import SessionState
@@ -23,6 +26,7 @@ from recordme.core.render_state import CensorRegion
 from recordme.core.session import SessionManager
 from recordme.platform_services.factory import get_platform_services
 from recordme.platform_services.hotkeys import GlobalHotkeyService
+from recordme.resources import get_app_icon, setup_app_user_model_id
 from recordme.ui.camera_preview import CameraPreviewWidget
 from recordme.ui.camera_settings_dialog import CameraSettingsDialog
 from recordme.ui.censor_box import CensorBoxWidget
@@ -49,8 +53,8 @@ def apply_dark_theme(app: QApplication) -> None:
     palette.setColor(QPalette.ColorRole.WindowText, QColor(240, 240, 240))
     palette.setColor(QPalette.ColorRole.Base, QColor(20, 20, 20))
     palette.setColor(QPalette.ColorRole.AlternateBase, QColor(35, 35, 35))
-    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 255))
-    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(20, 20, 20))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(250, 250, 250))
     palette.setColor(QPalette.ColorRole.Text, QColor(240, 240, 240))
     palette.setColor(QPalette.ColorRole.Button, QColor(45, 45, 45))
     palette.setColor(QPalette.ColorRole.ButtonText, QColor(240, 240, 240))
@@ -59,6 +63,29 @@ def apply_dark_theme(app: QApplication) -> None:
     palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
     palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
     app.setPalette(palette)
+    app.setStyleSheet(
+        """
+        QToolTip {
+            background-color: #1A1A1A;
+            color: #FFFFFF;
+            border: 1px solid #444444;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        """
+    )
+
+
+class ButtonCursorEventFilter(QObject):
+    """Garantiza que todos los botones de la interfaz muestren el cursor pointer."""
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if event.type() in (QEvent.Type.Show, QEvent.Type.Polish):
+            if isinstance(watched, (QPushButton, QAbstractButton)):
+                watched.setCursor(Qt.CursorShape.PointingHandCursor)
+        return super().eventFilter(watched, event)
 
 
 class RecordMeApp:
@@ -67,11 +94,19 @@ class RecordMeApp:
     def __init__(self, session_manager: SessionManager, settings: AppSettings) -> None:
         self.session_manager = session_manager
         self.settings = settings
-        init_language(self.settings.language if self.settings.language in ("es", "zh", "en") else None)
+        forced_lang = (
+            self.settings.language
+            if self.settings.language in ("es", "zh", "en") and self.settings.language != "auto"
+            else None
+        )
+        init_language(forced_lang)
         self.platform_services = get_platform_services()
 
         self.controller = RecordingController(session_manager, settings)
         self.toolbar = FloatingToolbar(session_manager)
+        app_icon = get_app_icon()
+        if not app_icon.isNull():
+            self.toolbar.setWindowIcon(app_icon)
         self.selector_overlay: RegionSelectorOverlay | None = None
         self.region_frame: RegionFrameWidget | None = None
         self.camera_preview: CameraPreviewWidget | None = None
@@ -82,6 +117,7 @@ class RecordMeApp:
         self.censor_selector_overlay: CensorAreaSelectorOverlay | None = None
         self.screen_zoom_overlay = ScreenZoomOverlay()
         self._is_testing_teleprompter = False
+        self._camera_dialog_open = False
 
         self._zoom_level: float = 1.0
         self._zoom_cx: float = 0.5
@@ -92,6 +128,34 @@ class RecordMeApp:
         self._connect_signals()
         self._position_toolbar()
         self.hotkey_service.start()
+
+        if sys.platform == "darwin":
+            self._verify_macos_permissions()
+
+    def _verify_macos_permissions(self) -> None:
+        """Comprueba permisos de macOS y orienta al usuario si faltan accesos de pantalla o accesibilidad."""
+        try:
+            perms = self.platform_services.request_permissions()
+            missing = []
+            if not perms.get("screen_capture", True):
+                missing.append("Grabación de pantalla (Ajustes del Sistema > Privacidad y Seguridad > Grabación de Pantalla)")
+            if not perms.get("accessibility", True):
+                missing.append("Accesibilidad para atajos globales (Ajustes del Sistema > Privacidad y Seguridad > Accesibilidad)")
+
+            if missing:
+                msg = (
+                    "Para que RecordMe funcione al 100% en macOS se requieren los siguientes permisos:\n\n• "
+                    + "\n• ".join(missing)
+                    + "\n\nPor favor, otorga los accesos necesarios para habilitar la captura con ScreenCaptureKit y los atajos de teclado."
+                )
+                logger.warning(msg)
+                QMessageBox.information(
+                    self.toolbar,
+                    "Permisos de macOS — RecordMe",
+                    msg,
+                )
+        except Exception as e:
+            logger.debug("Error comprobando permisos de macOS: %s", e)
 
     def _connect_signals(self) -> None:
         """Conecta las señales entre la barra flotante y el controlador de grabación."""
@@ -105,6 +169,7 @@ class RecordMeApp:
         self.toolbar.teleprompter_clicked.connect(self._open_teleprompter_editor)
         self.toolbar.censor_clicked.connect(self._open_censor_area_selector)
         self.toolbar.request_exit.connect(self._exit_app)
+        self.toolbar.escape_pressed.connect(self._on_escape_pressed)
 
         # Atajos globales de zoom y desplazamiento
         self.hotkey_service.zoom_in.connect(self._zoom_in_step)
@@ -115,28 +180,88 @@ class RecordMeApp:
         self.hotkey_service.pan_left.connect(lambda: self._pan_step(-0.10, 0.0))
         self.hotkey_service.pan_right.connect(lambda: self._pan_step(0.10, 0.0))
 
+        # Atajos globales directos (L: Área, R: Grabar/Detener, P: Pausa, M: Mic, C: Cámara, T: Teleprompter, X: Censura, Q: Salir)
+        self.hotkey_service.trigger_area.connect(self._open_region_selector)
+        self.hotkey_service.trigger_record.connect(self._on_hotkey_record)
+        self.hotkey_service.trigger_pause.connect(self._on_hotkey_pause)
+        self.hotkey_service.trigger_mic.connect(self.toolbar._toggle_mic)
+        self.hotkey_service.trigger_camera.connect(self.toolbar._toggle_camera)
+        self.hotkey_service.trigger_teleprompter.connect(self._open_teleprompter_editor)
+        self.hotkey_service.trigger_censor.connect(self._open_censor_area_selector)
+        self.hotkey_service.trigger_exit.connect(self._exit_app)
+        self.hotkey_service.trigger_escape.connect(self._on_escape_pressed)
+
         self.controller.recording_finished.connect(self._on_recording_finished)
         self.controller.recording_failed.connect(self._on_recording_failed)
 
+    def _on_hotkey_record(self) -> None:
+        """Maneja el atajo de teclado para iniciar o detener grabación sin disparar nuevas grabaciones."""
+        if self.session_manager.state in (SessionState.RECORDING, SessionState.COUNTDOWN, SessionState.PAUSED):
+            logger.info("Atajo R: Deteniendo grabación actual.")
+            self._stop_recording()
+        elif self.session_manager.state == SessionState.IDLE:
+            logger.info("Atajo R: Iniciando grabación.")
+            self._initiate_recording()
+        else:
+            logger.debug("Atajo R ignorado en estado: %s", self.session_manager.state.name)
+
+    def _on_hotkey_pause(self) -> None:
+        """Maneja el atajo de teclado para alternar pausa/reanudación."""
+        if self.session_manager.state in (SessionState.RECORDING, SessionState.COUNTDOWN):
+            logger.info("Atajo P: Pausando grabación.")
+            self._pause_recording()
+        elif self.session_manager.state == SessionState.PAUSED:
+            logger.info("Atajo P: Reanudando grabación.")
+            self._resume_recording()
+        else:
+            logger.debug("Atajo P ignorado en estado: %s", self.session_manager.state.name)
+
     def _on_camera_toggled(self, enabled: bool) -> None:
-        """Abre el panel de configuración de cámara antes de activarla o la desactiva."""
-        if enabled:
+        """Abre el panel de configuración de cámara si está inactiva, o la apaga y quita su miniatura."""
+        if self._camera_dialog_open:
+            logger.info("El diálogo de cámara ya se encuentra abierto. Ignorando atajo C.")
+            return
+
+        if self.camera_preview is not None or not enabled:
+            # Desactivar y remover la miniatura
+            if self.controller.camera_source and self.camera_preview:
+                try:
+                    self.controller.camera_source.remove_on_frame_callback(self.camera_preview.update_frame)
+                except Exception:
+                    pass
+            if self.camera_preview:
+                self.camera_preview.hide()
+                self.camera_preview.close()
+                self.camera_preview.deleteLater()
+                self.camera_preview = None
+            self.controller.set_camera_enabled(False)
+            self.toolbar.set_camera_enabled(False)
+            logger.info("Miniatura de cámara desactivada y removida de pantalla.")
+            return
+
+        # Si está inactiva, abrir el diálogo de configuración evitando ventanas duplicadas
+        self._camera_dialog_open = True
+        try:
             dialog = CameraSettingsDialog(
                 current_settings=self.settings.camera,
                 camera_source=self.controller.camera_source,
                 parent=self.toolbar,
             )
+            self.platform_services.exclude_window_from_capture(dialog)
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 self.controller.apply_camera_settings(self.settings.camera)
                 success = self.controller.set_camera_enabled(True)
                 if success and self.controller.camera_source:
                     if self.camera_preview:
+                        self.camera_preview.hide()
                         self.camera_preview.close()
+                        self.camera_preview = None
                     self.camera_preview = CameraPreviewWidget(
                         initial_layout=self.controller.camera_layout,
                         capture_region=self.controller.current_region,
                     )
                     self.camera_preview.layout_updated.connect(self.controller.update_camera_layout)
+                    self.camera_preview.close_requested.connect(lambda: self._on_camera_toggled(False))
                     self.controller.camera_source.add_on_frame_callback(self.camera_preview.update_frame)
                     self.camera_preview.show()
                     self.toolbar.set_camera_enabled(True)
@@ -150,12 +275,8 @@ class RecordMeApp:
                     )
             else:
                 self.toolbar.set_camera_enabled(False)
-        else:
-            self.controller.set_camera_enabled(False)
-            if self.camera_preview:
-                self.camera_preview.close()
-                self.camera_preview = None
-                logger.info("Vista previa de cámara cerrada.")
+        finally:
+            self._camera_dialog_open = False
 
     def _position_toolbar(self, at_bottom: bool = False) -> None:
         """Ubica la barra flotante centrada en la parte superior o inferior de la pantalla."""
@@ -171,9 +292,46 @@ class RecordMeApp:
 
     def _open_region_selector(self) -> None:
         """Abre el overlay para seleccionar el área de pantalla."""
+        if self.session_manager.state in (SessionState.RECORDING, SessionState.COUNTDOWN, SessionState.PAUSED):
+            logger.debug("Selección de área ignorada en estado: %s", self.session_manager.state.name)
+            return
+
+        # Si ya existe un overlay visible, traerlo al frente
+        if self.selector_overlay is not None and self.selector_overlay.isVisible():
+            self.selector_overlay.raise_()
+            self.selector_overlay.activateWindow()
+            return
+
+        # Limpiar overlay anterior si quedó oculto o cerrado
+        if self.selector_overlay is not None:
+            try:
+                self.selector_overlay.close()
+                self.selector_overlay.deleteLater()
+            except Exception:
+                pass
+            self.selector_overlay = None
+
         self.selector_overlay = RegionSelectorOverlay()
         self.selector_overlay.region_selected.connect(self._on_region_selected)
+        self.selector_overlay.selection_canceled.connect(self._on_region_selector_canceled)
+        self.selector_overlay.destroyed.connect(self._on_region_selector_destroyed)
         self.selector_overlay.show()
+        self.selector_overlay.raise_()
+        self.selector_overlay.activateWindow()
+
+    def _on_region_selector_canceled(self) -> None:
+        """Limpia el selector de área si el usuario canceló con Esc o clic derecho."""
+        if self.selector_overlay is not None:
+            try:
+                self.selector_overlay.close()
+                self.selector_overlay.deleteLater()
+            except Exception:
+                pass
+            self.selector_overlay = None
+
+    def _on_region_selector_destroyed(self) -> None:
+        """Sincroniza el selector de área cuando Qt destruye el widget."""
+        self.selector_overlay = None
 
     def _on_region_selected(self, region: Rect) -> None:
         """Aplica la región elegida a la barra, al controlador y al marco visual interactivo."""
@@ -181,7 +339,12 @@ class RecordMeApp:
         self.toolbar.update_selected_region(region)
         if self.camera_preview:
             self.camera_preview.update_capture_region(region)
-        if self.selector_overlay:
+        if self.selector_overlay is not None:
+            try:
+                self.selector_overlay.close()
+                self.selector_overlay.deleteLater()
+            except Exception:
+                pass
             self.selector_overlay = None
 
         screen = QApplication.primaryScreen()
@@ -196,6 +359,12 @@ class RecordMeApp:
                 self.region_frame.reset_fullscreen_requested.connect(self._reset_to_fullscreen)
             self.region_frame.set_physical_region(region, dpr)
             self.region_frame.show()
+
+            # En Linux (X11/Wayland), aplicar estrategia de colocación fuera del área seleccionada
+            if hasattr(self.platform_services, "reposition_outside_region"):
+                self.platform_services.reposition_outside_region(self.toolbar, region, screen_rect)
+                if self.teleprompter and self.teleprompter.isVisible():
+                    self.platform_services.reposition_outside_region(self.teleprompter, region, screen_rect)
         else:
             if self.region_frame:
                 self.region_frame.close()
@@ -212,6 +381,23 @@ class RecordMeApp:
         """Restaura la región de grabación a la pantalla completa."""
         screen_rect = get_primary_screen_physical_rect()
         self._on_region_selected(screen_rect)
+
+    def _on_escape_pressed(self) -> None:
+        """Maneja la pulsación de Esc para cancelar selectores activos o eliminar el área seleccionada."""
+        if self.selector_overlay is not None and self.selector_overlay.isVisible():
+            self._on_region_selector_canceled()
+            return
+        if self.censor_selector_overlay is not None and self.censor_selector_overlay.isVisible():
+            self._on_censor_area_canceled()
+            return
+        if (
+            self.region_frame is not None
+            and self.region_frame.isVisible()
+            and self.session_manager.state == SessionState.IDLE
+        ):
+            logger.info("Esc detectado: eliminando selección de área y restableciendo a pantalla completa.")
+            self._reset_to_fullscreen()
+            return
 
     def _initiate_recording(self) -> None:
         """Inicia la cuenta regresiva antes de comenzar la grabación."""
@@ -324,13 +510,50 @@ class RecordMeApp:
 
     def _open_censor_area_selector(self) -> None:
         """Abre el overlay para que el usuario trace interactivamente el área a censurar."""
+        if self.censor_selector_overlay is not None and self.censor_selector_overlay.isVisible():
+            self.censor_selector_overlay.raise_()
+            self.censor_selector_overlay.activateWindow()
+            return
+
+        if self.censor_selector_overlay is not None:
+            try:
+                self.censor_selector_overlay.close()
+                self.censor_selector_overlay.deleteLater()
+            except Exception:
+                pass
+            self.censor_selector_overlay = None
+
         self.censor_selector_overlay = CensorAreaSelectorOverlay()
         self.censor_selector_overlay.area_selected.connect(self._on_censor_area_drawn)
+        self.censor_selector_overlay.selection_canceled.connect(self._on_censor_area_canceled)
+        self.censor_selector_overlay.destroyed.connect(self._on_censor_selector_destroyed)
         self.censor_selector_overlay.show()
+        self.censor_selector_overlay.raise_()
+        self.censor_selector_overlay.activateWindow()
+
+    def _on_censor_area_canceled(self) -> None:
+        """Limpia el selector de censura si el usuario canceló con Esc o clic derecho."""
+        if self.censor_selector_overlay is not None:
+            try:
+                self.censor_selector_overlay.close()
+                self.censor_selector_overlay.deleteLater()
+            except Exception:
+                pass
+            self.censor_selector_overlay = None
+
+    def _on_censor_selector_destroyed(self) -> None:
+        """Sincroniza el selector de censura cuando Qt destruye el widget."""
+        self.censor_selector_overlay = None
 
     def _on_censor_area_drawn(self, rect: QRect) -> None:
         """Crea un nuevo recuadro de censura en el área exacta seleccionada por el usuario."""
-        self.censor_selector_overlay = None
+        if self.censor_selector_overlay is not None:
+            try:
+                self.censor_selector_overlay.close()
+                self.censor_selector_overlay.deleteLater()
+            except Exception:
+                pass
+            self.censor_selector_overlay = None
         self._create_censor_box(rect=rect, mode="blur")
 
     def _create_censor_box(self, rect: QRect, mode: str = "blur") -> CensorBoxWidget:
@@ -394,31 +617,13 @@ class RecordMeApp:
             self.teleprompter_widget.resume_scrolling()
 
     def _stop_recording(self) -> None:
-        """Detiene la grabación solicitando interactivamente al usuario la ruta y nombre para guardar."""
-        now_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_folder = Path(self.settings.output.folder)
-        output_folder.mkdir(parents=True, exist_ok=True)
-        default_file = output_folder / f"Grabacion_{now_str}.mp4"
+        """Detiene la grabación de inmediato o cancela la cuenta regresiva si aún no empezó."""
+        if self.countdown_overlay:
+            self._on_countdown_canceled()
+            return
 
-        # Diálogo nativo modal y sobrepuesto sobre la barra flotante
-        dialog = QFileDialog(self.toolbar, tr("save_dialog_title"), str(default_file), tr("save_dialog_filter"))
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setDefaultSuffix("mp4")
-        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        dialog.raise_()
-        dialog.activateWindow()
-
-        target_path: Path | None = None
-        if dialog.exec() == QFileDialog.DialogCode.Accepted:
-            files = dialog.selectedFiles()
-            if files:
-                target_path = Path(files[0])
-
-        if target_path is not None:
-            self.controller.stop_recording(target_output_file=target_path)
-        else:
-            # Usuario canceló el guardado: descartar la grabación limpia
-            self.controller.cancel_recording()
+        if self.session_manager.state in (SessionState.RECORDING, SessionState.PAUSED):
+            self.controller.stop_recording()
 
         if self.region_frame:
             self.region_frame.close()
@@ -452,12 +657,30 @@ class RecordMeApp:
                 current_text=self.settings.teleprompter.last_script,
                 settings=self.settings.teleprompter,
             )
+            app_icon = get_app_icon()
+            if not app_icon.isNull():
+                self.teleprompter_editor.setWindowIcon(app_icon)
             self.teleprompter_editor.settings_applied.connect(self._on_teleprompter_applied)
             self.teleprompter_editor.test_requested.connect(self._on_teleprompter_test)
             self.teleprompter_editor.stop_test_requested.connect(self._on_teleprompter_stop_test)
         else:
             self.teleprompter_editor.update_from_settings(self.settings.teleprompter)
 
+        # Ubicar el panel del teleprompter por debajo de la barra flotante para no tapar los botones superiores
+        screen = QApplication.primaryScreen()
+        if screen:
+            geom = screen.availableGeometry()
+            dlg_w = self.teleprompter_editor.width()
+            dlg_h = self.teleprompter_editor.height()
+            x = geom.x() + (geom.width() - dlg_w) // 2
+            tb_bottom = self.toolbar.y() + self.toolbar.height()
+            y = max(tb_bottom + 25, geom.y() + 120)
+            if y + dlg_h > geom.bottom():
+                y = max(geom.y(), geom.bottom() - dlg_h - 15)
+            self.teleprompter_editor.move(x, y)
+
+        self.hotkey_service.set_text_input_active(True)
+        self.teleprompter_editor.finished.connect(lambda: self.hotkey_service.set_text_input_active(False))
         self.teleprompter_editor.show()
         self.teleprompter_editor.raise_()
         self.teleprompter_editor.activateWindow()
@@ -518,6 +741,7 @@ class RecordMeApp:
         logger.info("Cierre de aplicación solicitado.")
         if self.session_manager.state in (SessionState.RECORDING, SessionState.PAUSED, SessionState.COUNTDOWN):
             self.controller.cancel_recording()
+        self.controller.set_camera_enabled(False)
         self.hotkey_service.stop()
         for box in list(self.censor_boxes.values()):
             box.close()
@@ -540,20 +764,44 @@ class RecordMeApp:
         QApplication.quit()
 
     def _on_recording_finished(self, output_path: Path) -> None:
-        """Muestra aviso al finalizar sobrepuesto en pantalla con opción para abrir la carpeta contenedora."""
-        msg_box = QMessageBox(self.toolbar)
-        msg_box.setWindowFlags(msg_box.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        msg_box.setWindowTitle(APP_NAME)
-        msg_box.setText(tr("recording_finished_title"))
-        msg_box.setInformativeText(tr("recording_finished_msg", path=str(output_path)))
-        open_folder_btn = msg_box.addButton(tr("btn_open_folder"), QMessageBox.ButtonRole.ActionRole)
-        msg_box.addButton(tr("btn_accept"), QMessageBox.ButtonRole.AcceptRole)
-        msg_box.raise_()
-        msg_box.activateWindow()
-        msg_box.exec()
+        """Abre el explorador de archivos (Guardar como) para que el usuario elija directorio y nombre."""
+        # 1. Asegurar que la carpeta por defecto Videos/RecordMe exista siempre
+        default_dir = get_default_recordings_dir()
+        default_dir.mkdir(parents=True, exist_ok=True)
 
-        if msg_box.clickedButton() == open_folder_btn:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
+        # 2. Desactivar atajos de teclado mientras el diálogo de guardado esté activo
+        self.hotkey_service.set_text_input_active(True)
+        try:
+            suggested_path = str(output_path.resolve())
+            selected_path_str, _ = QFileDialog.getSaveFileName(
+                self.toolbar,
+                caption=tr("save_dialog_title"),
+                dir=suggested_path,
+                filter=f"{tr('save_dialog_filter')};;All Files (*.*)",
+            )
+        finally:
+            self.hotkey_service.set_text_input_active(False)
+
+        if selected_path_str:
+            target_path = Path(selected_path_str)
+            # Asegurar extensión .mp4
+            if not target_path.suffix:
+                target_path = target_path.with_suffix(".mp4")
+
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+
+            if target_path.resolve() != output_path.resolve():
+                try:
+                    if target_path.exists():
+                        target_path.unlink()
+                    shutil.move(str(output_path), str(target_path))
+                    logger.info("Video guardado y renombrado exitosamente por el usuario en: %s", target_path)
+                except Exception as e:
+                    logger.error("Error al mover el archivo al destino elegido: %s", e)
+            else:
+                logger.info("Video guardado en la ruta elegida: %s", target_path)
+        else:
+            logger.info("El usuario canceló el diálogo de guardado. El video se conserva en: %s", output_path)
 
         if self.session_manager.state == SessionState.DONE:
             self.session_manager.transition_to(SessionState.IDLE)
@@ -569,8 +817,10 @@ class RecordMeApp:
             self.session_manager.transition_to(SessionState.IDLE)
 
     def show(self) -> None:
-        """Muestra la barra flotante."""
+        """Muestra la barra flotante y le otorga foco activo."""
         self.toolbar.show()
+        self.toolbar.raise_()
+        self.toolbar.activateWindow()
 
 
 def create_app(argv: list[str] | None = None) -> tuple[QApplication, RecordMeApp]:
@@ -580,12 +830,22 @@ def create_app(argv: list[str] | None = None) -> tuple[QApplication, RecordMeApp
 
     platform_services = get_platform_services()
     platform_services.set_dpi_awareness()
+    setup_app_user_model_id()
 
     app = QApplication(argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_DISPLAY_NAME)
     app.setApplicationVersion(APP_VERSION)
+
+    app_icon = get_app_icon()
+    if not app_icon.isNull():
+        app.setWindowIcon(app_icon)
+
+    # Filtro global de cursor para asegurar que todos los botones tengan la mano indicadora (pointer)
+    cursor_filter = ButtonCursorEventFilter(app)
+    app.installEventFilter(cursor_filter)
+
     apply_dark_theme(app)
 
     settings = AppSettings.load()

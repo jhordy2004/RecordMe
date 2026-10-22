@@ -62,6 +62,7 @@ class TeleprompterWidget(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
 
         # Timer de animación a 60 FPS
         self._anim_timer = QTimer(self)
@@ -88,12 +89,14 @@ class TeleprompterWidget(QWidget):
 
         # Botón Play / Pause
         self.btn_play_pause = QPushButton(tr("tp_float_start"))
+        self.btn_play_pause.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_play_pause.setStyleSheet(self._button_style("#007ACC", "#0098FF"))
         self.btn_play_pause.clicked.connect(self._toggle_playback)
         ctrl_bar.addWidget(self.btn_play_pause)
 
         # Botón Reiniciar
         self.btn_rewind = QPushButton(tr("tp_float_restart"))
+        self.btn_rewind.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_rewind.setStyleSheet(self._button_style("#333333", "#444444"))
         self.btn_rewind.clicked.connect(self.reset_scroll)
         ctrl_bar.addWidget(self.btn_rewind)
@@ -102,6 +105,7 @@ class TeleprompterWidget(QWidget):
 
         # Botón Cerrar
         self.btn_close = QPushButton("✕")
+        self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_close.setFixedWidth(28)
         self.btn_close.setStyleSheet(self._button_style("#444444", "#C0392B"))
         self.btn_close.clicked.connect(self._on_close_clicked)
