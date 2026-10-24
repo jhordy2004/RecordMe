@@ -64,7 +64,7 @@ class WindowsDXCamBackend(CaptureBackend):
             logger.info("dxcam iniciado correctamente.")
             return True
         except Exception as e:
-            logger.exception("Error al iniciar dxcam: %s", e)
+            logger.warning("Error al iniciar dxcam (%s).", e)
             self.stop()
             return False
 
@@ -86,17 +86,19 @@ class WindowsDXCamBackend(CaptureBackend):
                 return self._latest_frame
 
     def stop(self) -> None:
-        """Detiene la captura y libera el objeto dxcam."""
+        """Detiene la captura de dxcam de forma segura sin liberar bruscamente COM/DirectX."""
         if self._camera is not None:
             try:
                 if getattr(self._camera, "is_capturing", False):
                     self._camera.stop()
-                if hasattr(self._camera, "release"):
-                    self._camera.release()
             except Exception as e:
                 logger.debug("Error deteniendo cámara dxcam: %s", e)
-            finally:
-                self._camera = None
+            # Marcar _is_released en True para prevenir que DXCamera.__del__ invoque duplicator.Release() (Access Violation 0xC0000005)
+            try:
+                self._camera._is_released = True
+            except Exception:
+                pass
+            self._camera = None
         self._is_capturing = False
         with self._lock:
             self._latest_frame = None

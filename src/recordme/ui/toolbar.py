@@ -27,6 +27,7 @@ from recordme.constants import APP_NAME
 from recordme.core.events import SessionState
 from recordme.core.session import SessionManager
 from recordme.platform_services.factory import get_platform_services
+from recordme.resources import get_app_logo_pixmap
 from recordme.utils.geometry import Rect, get_primary_screen_physical_rect
 from recordme.utils.i18n import tr
 
@@ -116,12 +117,14 @@ class FloatingToolbar(QWidget):
     request_pause_record = Signal()
     request_resume_record = Signal()
     request_stop_record = Signal()
+    mic_settings_requested = Signal()
     mic_toggled = Signal(bool)
     camera_toggled = Signal(bool)
     teleprompter_clicked = Signal()
     censor_clicked = Signal()
     request_exit = Signal()
     escape_pressed = Signal()
+    _session_state_changed_signal = Signal(object, object)
 
     def __init__(self, session_manager: SessionManager, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -151,7 +154,8 @@ class FloatingToolbar(QWidget):
         self._hover_badge = ToolbarHoverBadge(self)
 
         self._init_ui()
-        self.session_manager.add_listener(self._on_session_state_changed)
+        self._session_state_changed_signal.connect(self._on_session_state_changed)
+        self.session_manager.add_listener(self._session_state_changed_signal.emit)
 
     def _init_ui(self) -> None:
         """Construye la interfaz de la barra con tema oscuro y bordes redondeados."""
@@ -160,14 +164,20 @@ class FloatingToolbar(QWidget):
         self.layout_main.setContentsMargins(14, 8, 14, 8)
         self.layout_main.setSpacing(10)
 
-        # Nombre / Ícono de la app
-        self.app_title = QLabel(APP_NAME)
-        title_font = QFont()
-        title_font.setBold(True)
-        title_font.setPointSize(11)
-        self.app_title.setFont(title_font)
-        self.app_title.setStyleSheet("color: #FFFFFF;")
-        self.layout_main.addWidget(self.app_title)
+        # Logotipo oficial de RecordMe en su tamaño real original (114x38 px)
+        self.app_logo = QLabel()
+        logo_pix = get_app_logo_pixmap()
+        if not logo_pix.isNull():
+            self.app_logo.setPixmap(logo_pix)
+        else:
+            self.app_logo.setText(APP_NAME)
+            title_font = QFont()
+            title_font.setBold(True)
+            title_font.setPointSize(11)
+            self.app_logo.setFont(title_font)
+            self.app_logo.setStyleSheet("color: #FFFFFF;")
+        self.app_title = self.app_logo
+        self.layout_main.addWidget(self.app_logo)
 
         # Etiqueta de área seleccionada
         self.area_label = QLabel(f"{self._selected_region.width}×{self._selected_region.height}")
@@ -190,11 +200,11 @@ class FloatingToolbar(QWidget):
         self.btn_area.clicked.connect(self.request_region_selection.emit)
         self.layout_main.addWidget(self.btn_area)
 
-        # Botón Micrófono
+        # Botón Micrófono: al hacer clic abre el panel de configuración de audio
         self.btn_mic = QPushButton()
         self.btn_mic.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_mic.setMinimumWidth(110)
-        self.btn_mic.clicked.connect(self._toggle_mic)
+        self.btn_mic.clicked.connect(self.mic_settings_requested.emit)
         self.set_mic_enabled(True)
         self.layout_main.addWidget(self.btn_mic)
 
@@ -305,7 +315,10 @@ class FloatingToolbar(QWidget):
         elif event.type() in (QEvent.Type.Leave, QEvent.Type.MouseButtonPress):
             if hasattr(self, "_hover_badge"):
                 self._hover_badge.hide_badge()
-        return super().eventFilter(watched, event)
+        try:
+            return super().eventFilter(watched, event)
+        except (TypeError, RuntimeError):
+            return False
 
     def _show_badge_for(self, widget: QObject) -> None:
         """Despliega la etiqueta flotante superior de alto contraste con 'Atajo' y la tecla correspondiente."""
@@ -315,23 +328,23 @@ class FloatingToolbar(QWidget):
         shortcut_label = tr("tb_shortcut")
 
         if widget == self.btn_area:
-            self._hover_badge.show_for_widget(self.btn_area, shortcut_label, "Alt+L / L")
+            self._hover_badge.show_for_widget(self.btn_area, shortcut_label, "Alt+L")
         elif widget == self.btn_mic:
-            self._hover_badge.show_for_widget(self.btn_mic, shortcut_label, "Alt+M / M")
+            self._hover_badge.show_for_widget(self.btn_mic, shortcut_label, "Alt+M")
         elif widget == self.btn_cam:
-            self._hover_badge.show_for_widget(self.btn_cam, shortcut_label, "Alt+C / C")
+            self._hover_badge.show_for_widget(self.btn_cam, shortcut_label, "Alt+C")
         elif widget == self.btn_teleprompter:
-            self._hover_badge.show_for_widget(self.btn_teleprompter, shortcut_label, "Alt+T / T")
+            self._hover_badge.show_for_widget(self.btn_teleprompter, shortcut_label, "Alt+T")
         elif widget == self.btn_censor:
-            self._hover_badge.show_for_widget(self.btn_censor, shortcut_label, "Alt+X / X")
+            self._hover_badge.show_for_widget(self.btn_censor, shortcut_label, "Alt+X")
         elif widget == self.btn_pause:
-            self._hover_badge.show_for_widget(self.btn_pause, shortcut_label, "Alt+P / P")
+            self._hover_badge.show_for_widget(self.btn_pause, shortcut_label, "Alt+P")
         elif widget == self.btn_record:
-            self._hover_badge.show_for_widget(self.btn_record, shortcut_label, "Alt+R / R")
+            self._hover_badge.show_for_widget(self.btn_record, shortcut_label, "Alt+R")
         elif widget == self.btn_close_app:
-            self._hover_badge.show_for_widget(self.btn_close_app, shortcut_label, "Alt+Q / Q")
+            self._hover_badge.show_for_widget(self.btn_close_app, shortcut_label, "Alt+Q")
         elif widget == self.zoom_badge:
-            self._hover_badge.show_for_widget(self.zoom_badge, shortcut_label, "Ctrl++, Ctrl+-")
+            self._hover_badge.show_for_widget(self.zoom_badge, shortcut_label, "Alt +, Alt -")
 
     def _button_style(self, bg_normal: str, bg_hover: str) -> str:
         """Genera hojas de estilo CSS para botones redondeados modernos."""
@@ -405,6 +418,7 @@ class FloatingToolbar(QWidget):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         """Cierra la etiqueta flotante al destruir la barra."""
+        self.session_manager.remove_listener(self._session_state_changed_signal.emit)
         if hasattr(self, "_hover_badge"):
             self._hover_badge.close()
         super().closeEvent(event)
@@ -430,10 +444,14 @@ class FloatingToolbar(QWidget):
             )
         self.adjustSize()
 
-    def _toggle_mic(self) -> None:
-        """Alterna el estado del micrófono entre On y Off."""
+    def toggle_mic_mute(self) -> None:
+        """Alterna el mute del micrófono (atajo M o Alt+M) sin abrir el panel de configuración."""
         self.set_mic_enabled(not self._mic_enabled)
         self.mic_toggled.emit(self._mic_enabled)
+
+    def _toggle_mic(self) -> None:
+        """Alterna el estado del micrófono (compatibilidad con atajos y tests)."""
+        self.toggle_mic_mute()
 
     def set_mic_enabled(self, enabled: bool) -> None:
         """Actualiza el texto y apariencia visual del botón de micrófono."""
@@ -479,6 +497,12 @@ class FloatingToolbar(QWidget):
     def _on_record_clicked(self) -> None:
         """Maneja el clic del botón principal (Grabar o Detener)."""
         if self.session_manager.state in (SessionState.RECORDING, SessionState.PAUSED, SessionState.COUNTDOWN):
+            # Detener el contador inmediatamente al solicitar la finalización
+            self._timer.stop()
+            self.btn_pause.setVisible(False)
+            self.btn_record.setText(tr("tb_saving"))
+            self.btn_record.setEnabled(False)
+            self.btn_record.setStyleSheet(self._button_style("#7F8C8D", "#95A5A6"))
             self.request_stop_record.emit()
         else:
             self.request_start_record.emit()
@@ -532,6 +556,9 @@ class FloatingToolbar(QWidget):
             self.btn_record.setStyleSheet(self._button_style("#E50914", "#FF1E27"))
             self.update_tooltips()
         elif new_state == SessionState.FINALIZING:
+            self._timer.stop()
+            self.btn_pause.setVisible(False)
             self.btn_record.setText(tr("tb_saving"))
             self.btn_record.setEnabled(False)
+            self.btn_record.setStyleSheet(self._button_style("#7F8C8D", "#95A5A6"))
         self.adjustSize()

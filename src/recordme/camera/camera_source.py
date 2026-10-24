@@ -34,6 +34,7 @@ class CameraSource:
         self._thread: threading.Thread | None = None
         self._is_running = False
         self._latest_frame: npt.NDArray[np.uint8] | None = None
+        self._latest_frame_time: float = 0.0
         self._lock = threading.Lock()
         self._on_frame_callbacks: list[Callable[[npt.NDArray[np.uint8]], None]] = []
 
@@ -57,7 +58,7 @@ class CameraSource:
         try:
             backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
             # Intentar abrir la cámara con reintentos suaves si el hardware acaba de ser liberado
-            for attempt in range(3):
+            for _attempt in range(3):
                 self._cap = cv2.VideoCapture(self.device_index, backend)
                 if not self._cap.isOpened():
                     self._cap = cv2.VideoCapture(self.device_index)
@@ -69,9 +70,18 @@ class CameraSource:
                 logger.warning("No se pudo abrir el dispositivo de cámara con índice %d", self.device_index)
                 return False
 
+            if sys.platform == "win32":
+                try:
+                    # Configurar flujo en formato MJPG para optimizar el bus USB (reduce de 55MB/s a 3MB/s)
+                    # previniendo que DirectShow congele la cámara tras 30-40 segundos de grabación intensiva
+                    self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                except Exception:
+                    pass
+
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
             self._cap.set(cv2.CAP_PROP_FPS, self.fps)
+            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
             self._is_running = True
             self._thread = threading.Thread(target=self._capture_loop, daemon=True, name="Camera-Thread")
@@ -84,15 +94,34 @@ class CameraSource:
             return False
 
     def _capture_loop(self) -> None:
-        """Bucle continuo de lectura de cámara."""
+        """Bucle continuo de lectura de cámara con reconexión automática ante caídas de señal."""
         consecutive_errors = 0
         while self._is_running and self._cap is not None:
             ret, frame = self._cap.read()
             if not ret or frame is None:
                 consecutive_errors += 1
-                if consecutive_errors > 30:
-                    logger.warning("Cámara desconectada o sin señal de video.")
-                    time.sleep(0.1)
+                if consecutive_errors == 15:
+                    logger.warning("Cámara no responde. Intentando reconexión suave...")
+                    try:
+                        self._cap.release()
+                        backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
+                        self._cap = cv2.VideoCapture(self.device_index, backend)
+                        if self._cap.isOpened():
+                            if sys.platform == "win32":
+                                try:
+                                    self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                                except Exception:
+                                    pass
+                            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                            self._cap.set(cv2.CAP_PROP_FPS, self.fps)
+                            consecutive_errors = 0
+                            continue
+                    except Exception as re_ex:
+                        logger.debug("Fallo en reconexión de cámara: %s", re_ex)
+                elif consecutive_errors > 30:
+                    time.sleep(0.08)
                 time.sleep(0.01)
                 continue
 
@@ -101,8 +130,10 @@ class CameraSource:
             if self.mirror:
                 frame_uint8 = np.asarray(cv2.flip(frame_uint8, 1), dtype=np.uint8)
 
+            now = time.monotonic()
             with self._lock:
                 self._latest_frame = frame_uint8
+                self._latest_frame_time = now
 
             # Notificar a los observadores (vista previa UI)
             for cb in list(self._on_frame_callbacks):

@@ -349,9 +349,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "缩放 {pct}% | 方向键或 <>: 移动",
     },
     "zoom_badge_tooltip": {
-        "es": "Zoom activo (Usa Ctrl++ para aumentar, Ctrl+- para reducir, Ctrl+Flechas para moverte)",
-        "en": "Active zoom (Use Ctrl++ to zoom in, Ctrl+- to zoom out, Ctrl+Arrows to pan)",
-        "zh": "当前缩放 (使用 Ctrl++ 放大, Ctrl+- 缩小, Ctrl+方向键平移)",
+        "es": "Zoom activo (Usa Alt + para aumentar, Alt - para reducir, Alt+Flechas para moverte)",
+        "en": "Active zoom (Use Alt + to zoom in, Alt - to zoom out, Alt+Arrows to pan)",
+        "zh": "当前缩放 (使用 Alt + 放大, Alt - 缩小, Alt+方向键平移)",
     },
     "tb_exit_tooltip": {
         "es": "Cerrar RecordMe",
@@ -374,6 +374,83 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "es": "Cerrar",
         "en": "Close",
         "zh": "关闭",
+    },
+
+    # Configuración de Audio (Micrófono y Sistema)
+    "audio_dialog_title": {
+        "es": "Configuración de Audio",
+        "en": "Audio Settings",
+        "zh": "音频设置",
+    },
+    "audio_dialog_header": {
+        "es": "Opciones de Grabación de Audio",
+        "en": "Audio Recording Options",
+        "zh": "音频录制选项",
+    },
+    "audio_mode_label": {
+        "es": "Modo de grabación de audio:",
+        "en": "Audio recording mode:",
+        "zh": "音频录制模式:",
+    },
+    "audio_mode_mic_only": {
+        "es": "Audio de entrada (Micrófono)",
+        "en": "Input audio (Microphone only)",
+        "zh": "输入音频 (仅麦克风)",
+    },
+    "audio_mode_mic_and_system": {
+        "es": "Audio de entrada + Audio del sistema (Loopback)",
+        "en": "Input audio + System audio (Loopback)",
+        "zh": "输入音频 + 系统声音 (内录回放)",
+    },
+    "audio_mode_help": {
+        "es": "Permite grabar videos de YouTube, música, juegos o sonido del PC junto a tu voz.",
+        "en": "Allows recording YouTube videos, music, games, or PC audio along with your voice.",
+        "zh": "允许在录制声音的同时录制 YouTube 视频、音乐、游戏或电脑声音。",
+    },
+    "audio_device_label": {
+        "es": "Dispositivo de micrófono:",
+        "en": "Microphone device:",
+        "zh": "麦克风设备:",
+    },
+    "audio_device_default": {
+        "es": "Predeterminado del sistema",
+        "en": "System default",
+        "zh": "系统默认",
+    },
+    "audio_noise_reduction_label": {
+        "es": "Supresión inteligente de ruido:",
+        "en": "Smart noise suppression:",
+        "zh": "智能降噪:",
+    },
+    "audio_noise_reduction_checkbox": {
+        "es": "Minimizar el ruido al mínimo (Voz ultraclara sin ruido de fondo)",
+        "en": "Minimize noise to minimum (Ultra-clear voice without background noise)",
+        "zh": "将噪音降至最低 (超清晰语音，无背景噪音)",
+    },
+    "audio_noise_reduction_help": {
+        "es": "Elimina zumbidos, estática y ruido de ventiladores para una grabación profesional.",
+        "en": "Removes hum, static, and fan noise for professional recording.",
+        "zh": "消除嗡嗡声、静电声和风扇噪音，实现专业录制效果。",
+    },
+    "audio_volume_label": {
+        "es": "Volumen / Ganancia:",
+        "en": "Volume / Gain:",
+        "zh": "音量 / 增益:",
+    },
+    "audio_test_button": {
+        "es": "Probar micrófono",
+        "en": "Test microphone",
+        "zh": "测试麦克风",
+    },
+    "region_frame_move": {
+        "es": "Mover",
+        "en": "Move",
+        "zh": "移动",
+    },
+    "region_frame_drag_to_move": {
+        "es": "Arrastrar para mover área",
+        "en": "Drag to move area",
+        "zh": "拖动以移动区域",
     },
     "btn_open_folder": {
         "es": "Abrir Carpeta",

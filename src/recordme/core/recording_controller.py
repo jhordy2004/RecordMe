@@ -1,6 +1,7 @@
 """Controlador de orquestación del ciclo de grabación completo (Video + Audio + Compositor + Muxer)."""
 
 import logging
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +17,7 @@ from recordme.capture.mss_fallback import MSSCaptureBackend
 from recordme.capture.qt_fallback import QtScreenCaptureBackend
 from recordme.compose.compositor import Compositor
 from recordme.config.paths import get_temp_dir
-from recordme.config.settings import AppSettings, CameraSettings
+from recordme.config.settings import AppSettings, AudioSettings, CameraSettings
 from recordme.core.events import SessionState
 from recordme.core.render_state import CameraLayout, CensorRegion, RenderState
 from recordme.core.session import SessionManager
@@ -215,8 +216,18 @@ class RecordingController(QObject):
         self.current_region = region.to_even()
         logger.info("Región de captura configurada en controller: %s", self.current_region)
 
-    def start_recording(self) -> bool:
-        """Inicia el pipeline de grabación."""
+    def apply_audio_settings(self, settings: AudioSettings) -> None:
+        """Actualiza los ajustes de audio activos."""
+        self.settings.audio = settings
+        self.set_mic_enabled(settings.mic_enabled)
+        logger.info("Ajustes de audio actualizados en controller: modo=%s, ruido=%s", settings.mode, settings.noise_reduction)
+
+    def start_recording(self, standby_countdown: bool = False) -> bool:
+        """Inicia el pipeline de grabación.
+
+        Si standby_countdown es True, inicializa y pre-calienta todos los backends y subprocesos
+        durante la cuenta atrás para que al llegar a 0 la grabación empiece instantáneamente con 0ms de demora.
+        """
         if self.session_manager.state not in (
             SessionState.IDLE,
             SessionState.CONFIGURING,
@@ -240,13 +251,15 @@ class RecordingController(QObject):
             dest_folder.mkdir(parents=True, exist_ok=True)
             self._output_file = dest_folder / filename
 
-            # 1. Iniciar backend de captura con fallback automático
+            # 1. Iniciar backend de captura con fallback automático sin instanciaciones redundantes
             fps = self.settings.output.fps
-            backends_to_try = [
-                create_capture_backend(),
-                MSSCaptureBackend(),
-                QtScreenCaptureBackend(),
-            ]
+            primary_backend = create_capture_backend()
+            backends_to_try = [primary_backend]
+            if not isinstance(primary_backend, MSSCaptureBackend):
+                backends_to_try.append(MSSCaptureBackend())
+            if not isinstance(primary_backend, QtScreenCaptureBackend):
+                backends_to_try.append(QtScreenCaptureBackend())
+
             self._capture_backend = None
             for backend in backends_to_try:
                 try:
@@ -273,9 +286,24 @@ class RecordingController(QObject):
             if not self._video_writer.start():
                 raise RuntimeError("No se pudo iniciar el proceso de FFmpeg para video.")
 
-            # 3. Iniciar grabador de audio de micrófono
-            self._mic_recorder = MicRecorder(output_file=self._temp_audio_file)
+            # 3. Iniciar grabador de audio de micrófono y sistema
+            dev_idx = None
+            if self.settings.audio.mic_device != "default":
+                try:
+                    dev_idx = int(self.settings.audio.mic_device)
+                except ValueError:
+                    pass
+
+            self._mic_recorder = MicRecorder(
+                output_file=self._temp_audio_file,
+                device_index=dev_idx,
+                mode=self.settings.audio.mode,
+                noise_reduction=self.settings.audio.noise_reduction,
+                gain_db=self.settings.audio.mic_gain_db,
+            )
             self._mic_recorder.set_muted(not self._mic_enabled)
+            if standby_countdown:
+                self._mic_recorder.set_recording_active(False)
             self._mic_recorder.start()
 
             # 4. Iniciar compositor
@@ -286,10 +314,15 @@ class RecordingController(QObject):
                 camera_source=self._camera_source,
                 fps=fps,
             )
+            if standby_countdown:
+                self._compositor.set_recording_active(False)
             self._compositor.start()
 
-            self.session_manager.transition_to(SessionState.RECORDING)
-            logger.info("Grabación iniciada exitosamente. Archivo temporal video: %s", self._temp_video_file)
+            if not standby_countdown:
+                self.session_manager.transition_to(SessionState.RECORDING)
+                logger.info("Grabación iniciada exitosamente. Archivo temporal video: %s", self._temp_video_file)
+            else:
+                logger.info("Pipeline de grabación pre-calentado en standby durante cuenta atrás.")
             return True
 
         except Exception as e:
@@ -298,6 +331,16 @@ class RecordingController(QObject):
             self.session_manager.transition_to(SessionState.ERROR, error_message=str(e))
             self.recording_failed.emit(str(e))
             return False
+
+    def activate_recording(self) -> bool:
+        """Activa instantáneamente la persistencia de video y audio tras finalizar la cuenta atrás (0 ms de latencia)."""
+        if self._compositor:
+            self._compositor.set_recording_active(True)
+        if self._mic_recorder:
+            self._mic_recorder.set_recording_active(True)
+        self.session_manager.transition_to(SessionState.RECORDING)
+        logger.info("Grabación activada instantáneamente tras concluir la cuenta atrás.")
+        return True
 
     def pause_recording(self) -> None:
         """Pausa la grabación."""
@@ -363,62 +406,123 @@ class RecordingController(QObject):
         logger.info("Grabación cancelada y descartada exitosamente.")
 
     def stop_recording(self, target_output_file: Path | None = None) -> None:
-        """Detiene y finaliza la grabación, realizando el muxing A/V."""
+        """Detiene y finaliza la grabación de forma asíncrona y segura sin congelar el hilo principal."""
         if self.session_manager.state not in (SessionState.RECORDING, SessionState.PAUSED):
             return
 
         self.session_manager.transition_to(SessionState.FINALIZING)
         logger.info("Deteniendo grabación y finalizando archivos...")
 
-        # Detener componentes
-        if self._compositor:
-            self._compositor.stop()
-        if self._capture_backend:
-            self._capture_backend.stop()
-        if self._mic_recorder:
-            self._mic_recorder.stop()
-        if self._video_writer:
-            self._video_writer.close()
-
-        # Calcular offset inicial entre video y audio
-        offset_seconds = 0.0
-        if (
-            self._compositor
-            and self._compositor.first_frame_time is not None
-            and self._mic_recorder
-            and self._mic_recorder.first_audio_time is not None
-        ):
-            # offset = primer_video - primer_audio
-            offset_seconds = self._compositor.first_frame_time - self._mic_recorder.first_audio_time
-            logger.info("Offset calculado A/V: %.4f segundos", offset_seconds)
-
-        # Muxing a MP4 final
-        assert self._temp_video_file is not None
         output_file = target_output_file if target_output_file is not None else self._output_file
-        assert output_file is not None
+        temp_video = self._temp_video_file
+        temp_audio = self._temp_audio_file
+        compositor = self._compositor
+        capture_backend = self._capture_backend
+        mic_recorder = self._mic_recorder
+        video_writer = self._video_writer
+        muxer = self._muxer
 
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+        # Desvincular referencias inmediatamente
+        self._compositor = None
+        self._capture_backend = None
+        self._mic_recorder = None
+        self._video_writer = None
 
-        success = self._muxer.mux(
-            video_path=self._temp_video_file,
-            audio_path=self._temp_audio_file,
-            output_mp4=output_file,
-            offset_seconds=offset_seconds,
-        )
+        def _finalize_worker() -> None:
+            try:
+                # 1. Detener componentes con manejo de errores individual
+                if compositor:
+                    try:
+                        compositor.stop()
+                    except Exception as ex:
+                        logger.warning("Error deteniendo compositor: %s", ex)
 
-        self._cleanup_resources()
+                if capture_backend:
+                    try:
+                        capture_backend.stop()
+                    except Exception as ex:
+                        logger.warning("Error deteniendo backend de captura: %s", ex)
 
-        if success and output_file.exists():
-            self.session_manager.transition_to(SessionState.DONE)
-            logger.info("Grabación completada: %s", output_file)
-            self.recording_finished.emit(output_file)
-        else:
-            msg = "Error durante el muxing final de FFmpeg."
-            self.session_manager.transition_to(SessionState.ERROR, error_message=msg)
-            self.recording_failed.emit(msg)
+                if mic_recorder:
+                    try:
+                        mic_recorder.stop()
+                    except Exception as ex:
+                        logger.warning("Error deteniendo mic recorder: %s", ex)
+
+                if video_writer:
+                    try:
+                        video_writer.close()
+                    except Exception as ex:
+                        logger.warning("Error cerrando video writer: %s", ex)
+
+                # 2. Calcular offset inicial entre video y audio
+                offset_seconds = 0.0
+                if (
+                    compositor
+                    and compositor.first_frame_time is not None
+                    and mic_recorder
+                    and mic_recorder.first_audio_time is not None
+                ):
+                    offset_seconds = compositor.first_frame_time - mic_recorder.first_audio_time
+                    logger.info("Offset calculado A/V: %.4f segundos", offset_seconds)
+
+                # 3. Muxing a MP4 final
+                if temp_video is None or not temp_video.exists():
+                    raise RuntimeError("No se encontró el archivo de video temporal para muxing.")
+
+                if output_file is None:
+                    raise RuntimeError("No se especificó la ruta del archivo de salida.")
+
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+
+                success = muxer.mux(
+                    video_path=temp_video,
+                    audio_path=temp_audio,
+                    output_mp4=output_file,
+                    offset_seconds=offset_seconds,
+                )
+
+                self._cleanup_resources()
+
+                if success and output_file.exists():
+                    self.session_manager.transition_to(SessionState.DONE)
+                    logger.info("Grabación completada: %s", output_file)
+                    self.recording_finished.emit(output_file)
+                else:
+                    msg = "Error durante el muxing final de FFmpeg."
+                    self.session_manager.transition_to(SessionState.ERROR, error_message=msg)
+                    self.recording_failed.emit(msg)
+            except Exception as e:
+                logger.exception("Error crítico durante finalización de grabación: %s", e)
+                self._cleanup_resources()
+                self.session_manager.transition_to(SessionState.ERROR, error_message=str(e))
+                self.recording_failed.emit(str(e))
+
+        finalize_thread = threading.Thread(target=_finalize_worker, daemon=True, name="Finalize-Thread")
+        finalize_thread.start()
 
     def _cleanup_resources(self) -> None:
-        """Libera punteros a componentes en ejecución."""
+        """Libera punteros y detiene componentes en ejecución si continúan activos."""
+        if self._compositor:
+            try:
+                self._compositor.stop()
+            except Exception:
+                pass
+        if self._capture_backend:
+            try:
+                self._capture_backend.stop()
+            except Exception:
+                pass
+        if self._mic_recorder:
+            try:
+                self._mic_recorder.stop()
+            except Exception:
+                pass
+        if self._video_writer:
+            try:
+                self._video_writer.close()
+            except Exception:
+                pass
         self._compositor = None
         self._video_writer = None
         self._capture_backend = None

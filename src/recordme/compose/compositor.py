@@ -44,6 +44,8 @@ class Compositor:
         self._last_frame_time: float = time.perf_counter()
 
         self._is_running = False
+        self._recording_active = True
+        self._reset_clock = False
         self._is_paused = False
         self._thread: threading.Thread | None = None
 
@@ -60,6 +62,15 @@ class Compositor:
     def total_frames(self) -> int:
         """Número total de frames procesados."""
         return self._total_frames_composed
+
+    def set_recording_active(self, active: bool) -> None:
+        """Activa o desactiva la escritura de frames (permite pre-calentamiento durante la cuenta atrás)."""
+        self._recording_active = active
+        if active:
+            if self._first_frame_time is None:
+                self._first_frame_time = time.perf_counter()
+            self._reset_clock = True
+        logger.debug("Compositor recording_active configurado a: %s", active)
 
     def update_render_state(self, state: RenderState) -> None:
         """Actualiza atómicamente el snapshot de estado que consume el compositor."""
@@ -86,6 +97,13 @@ class Compositor:
         consecutive_duplicates = 0
 
         while self._is_running:
+            if self._reset_clock:
+                t0 = time.perf_counter()
+                iteration = 0
+                paused_duration = 0.0
+                pause_start_time = None
+                self._reset_clock = False
+
             now = time.perf_counter()
 
             if self._is_paused:
@@ -109,6 +127,11 @@ class Compositor:
 
             # Capturar y componer frame
             frame = self._compose_frame()
+            if not self._recording_active:
+                # Durante la cuenta atrás, mantenemos la captura activa para tenerla lista, pero no persistimos
+                iteration += 1
+                continue
+
             if frame is not None:
                 if self._first_frame_time is None:
                     self._first_frame_time = time.perf_counter()
@@ -121,6 +144,18 @@ class Compositor:
                     self.video_writer.write_frame(self._last_valid_frame)
                     self._total_frames_composed += 1
                     consecutive_duplicates += 1
+
+            # Sincronización A/V estricta basada en tiempo real de reloj de pared:
+            # Si la composición tomó más tiempo debido a carga de CPU/GPU, compensar emitiendo
+            # duplicados controlados (hasta 3 frames) para que el video jamás quede rezagado
+            # respecto al audio, garantizando que el movimiento de labios coincida a la perfección.
+            elapsed_real = time.perf_counter() - t0 - paused_duration
+            expected_frames = int(elapsed_real * self._fps)
+            lag_frames = expected_frames - self._total_frames_composed
+            if 0 < lag_frames <= 3 and self._last_valid_frame is not None:
+                for _ in range(lag_frames):
+                    self.video_writer.write_frame(self._last_valid_frame)
+                    self._total_frames_composed += 1
 
             iteration += 1
 

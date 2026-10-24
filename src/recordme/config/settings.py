@@ -31,6 +31,9 @@ class AudioSettings:
     mic_device: str = "default"
     mic_enabled: bool = True
     mic_gain_db: float = 0.0
+    mode: str = "mic_only"  # "mic_only" (Audio de entrada) o "mic_and_system" (Audio entrada + sistema loopback)
+    system_audio_enabled: bool = False
+    noise_reduction: bool = True  # Supresión inteligente de ruido (micrófono)
 
 
 @dataclass
@@ -209,6 +212,9 @@ class AppSettings:
                 mic_device=str(aud.get("mic_device", instance.audio.mic_device)),
                 mic_enabled=bool(aud.get("mic_enabled", instance.audio.mic_enabled)),
                 mic_gain_db=float(aud.get("mic_gain_db", instance.audio.mic_gain_db)),
+                mode=str(aud.get("mode", instance.audio.mode)),
+                system_audio_enabled=bool(aud.get("system_audio_enabled", instance.audio.system_audio_enabled)),
+                noise_reduction=bool(aud.get("noise_reduction", instance.audio.noise_reduction)),
             )
 
         # Camera

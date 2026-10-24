@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from recordme.config.paths import get_default_recordings_dir
-from recordme.config.settings import AppSettings, TeleprompterSettings
+from recordme.config.settings import AppSettings, AudioSettings, TeleprompterSettings
 from recordme.constants import APP_DISPLAY_NAME, APP_NAME, APP_VERSION
 from recordme.core.events import SessionState
 from recordme.core.recording_controller import RecordingController
@@ -27,6 +27,7 @@ from recordme.core.session import SessionManager
 from recordme.platform_services.factory import get_platform_services
 from recordme.platform_services.hotkeys import GlobalHotkeyService
 from recordme.resources import get_app_icon, setup_app_user_model_id
+from recordme.ui.audio_settings_dialog import AudioSettingsDialog
 from recordme.ui.camera_preview import CameraPreviewWidget
 from recordme.ui.camera_settings_dialog import CameraSettingsDialog
 from recordme.ui.censor_box import CensorBoxWidget
@@ -164,6 +165,7 @@ class RecordMeApp:
         self.toolbar.request_pause_record.connect(self._pause_recording)
         self.toolbar.request_resume_record.connect(self._resume_recording)
         self.toolbar.request_stop_record.connect(self._stop_recording)
+        self.toolbar.mic_settings_requested.connect(self._open_audio_settings_dialog)
         self.toolbar.mic_toggled.connect(self.controller.set_mic_enabled)
         self.toolbar.camera_toggled.connect(self._on_camera_toggled)
         self.toolbar.teleprompter_clicked.connect(self._open_teleprompter_editor)
@@ -184,9 +186,9 @@ class RecordMeApp:
         self.hotkey_service.trigger_area.connect(self._open_region_selector)
         self.hotkey_service.trigger_record.connect(self._on_hotkey_record)
         self.hotkey_service.trigger_pause.connect(self._on_hotkey_pause)
-        self.hotkey_service.trigger_mic.connect(self.toolbar._toggle_mic)
+        self.hotkey_service.trigger_mic.connect(self.toolbar.toggle_mic_mute)
         self.hotkey_service.trigger_camera.connect(self.toolbar._toggle_camera)
-        self.hotkey_service.trigger_teleprompter.connect(self._open_teleprompter_editor)
+        self.hotkey_service.trigger_teleprompter.connect(self._toggle_teleprompter)
         self.hotkey_service.trigger_censor.connect(self._open_censor_area_selector)
         self.hotkey_service.trigger_exit.connect(self._exit_app)
         self.hotkey_service.trigger_escape.connect(self._on_escape_pressed)
@@ -277,6 +279,28 @@ class RecordMeApp:
                 self.toolbar.set_camera_enabled(False)
         finally:
             self._camera_dialog_open = False
+
+    def _open_audio_settings_dialog(self) -> None:
+        """Abre el panel modal de configuración de audio (micrófono, loopback del sistema y supresión de ruido)."""
+        dialog = AudioSettingsDialog(
+            current_settings=self.settings.audio,
+            parent=self.toolbar,
+        )
+        self.platform_services.exclude_window_from_capture(dialog)
+        dialog.settings_applied.connect(self._on_audio_settings_applied)
+        dialog.exec()
+
+    def _on_audio_settings_applied(self, new_settings: AudioSettings) -> None:
+        """Aplica y persiste la configuración de audio seleccionada."""
+        self.settings.audio = new_settings
+        self.controller.apply_audio_settings(new_settings)
+        self.settings.save()
+        self.toolbar.set_mic_enabled(new_settings.mic_enabled)
+        logger.info(
+            "Configuración de audio guardada y aplicada: modo=%s, supresión_ruido=%s",
+            new_settings.mode,
+            new_settings.noise_reduction,
+        )
 
     def _position_toolbar(self, at_bottom: bool = False) -> None:
         """Ubica la barra flotante centrada en la parte superior o inferior de la pantalla."""
@@ -424,24 +448,33 @@ class RecordMeApp:
             target_rect = QRect(log_x, log_y, log_w, log_h)
 
         self.session_manager.transition_to(SessionState.COUNTDOWN)
+        # Pre-calentar el pipeline en segundo plano durante la cuenta atrás para que al llegar a 0 la grabación sea instantánea
+        prewarmed = self.controller.start_recording(standby_countdown=True)
+        if not prewarmed:
+            logger.warning("Fallo al pre-calentar el pipeline de grabación. Regresando a IDLE.")
+            self.session_manager.transition_to(SessionState.IDLE)
+            return
         self.countdown_overlay = CountdownOverlay(target_rect=target_rect, seconds=3)
         self.countdown_overlay.finished.connect(self._on_countdown_finished)
         self.countdown_overlay.canceled.connect(self._on_countdown_canceled)
         self.countdown_overlay.start()
 
     def _on_countdown_finished(self) -> None:
-        """Comienza la grabación efectiva tras concluir la cuenta atrás."""
+        """Comienza la grabación efectiva de forma instantánea (0 ms de espera tras la cuenta atrás)."""
         self.countdown_overlay = None
         self._start_recording()
 
     def _on_countdown_canceled(self) -> None:
-        """Cancela la cuenta regresiva y regresa a IDLE."""
+        """Cancela la cuenta regresiva, aborta el pipeline pre-calentado y regresa a IDLE."""
         self.countdown_overlay = None
-        self.session_manager.transition_to(SessionState.IDLE)
+        self.controller.cancel_recording()
 
     def _start_recording(self) -> None:
-        """Inicia el proceso de grabación."""
-        success = self.controller.start_recording()
+        """Activa la grabación inmediatamente."""
+        if self.session_manager.state == SessionState.COUNTDOWN:
+            success = self.controller.activate_recording()
+        else:
+            success = self.controller.start_recording()
         if success:
             if self.region_frame:
                 self.region_frame.set_recording_state(True)
@@ -453,7 +486,7 @@ class RecordMeApp:
             )
 
     def _zoom_in_step(self) -> None:
-        """Aumenta el zoom un 10% (Ctrl++). Centra en el cursor si parte del 100%."""
+        """Aumenta el zoom un 10% (Alt++). Centra en el cursor si parte del 100%."""
         if self._zoom_level <= 1.01:
             cursor_pos = QCursor.pos()
             screen = QApplication.primaryScreen()
@@ -473,7 +506,7 @@ class RecordMeApp:
         logger.info("Zoom aumentado a %.0f%% (centro: %.2f, %.2f)", self._zoom_level * 100, self._zoom_cx, self._zoom_cy)
 
     def _zoom_out_step(self) -> None:
-        """Reduce el zoom un 10% (Ctrl+-)."""
+        """Reduce el zoom un 10% (Alt+-)."""
         self._zoom_level = max(1.0, round(self._zoom_level - 0.10, 2))
         if self._zoom_level <= 1.01:
             self._zoom_cx = 0.5
@@ -482,7 +515,7 @@ class RecordMeApp:
         logger.info("Zoom reducido a %.0f%% (centro: %.2f, %.2f)", self._zoom_level * 100, self._zoom_cx, self._zoom_cy)
 
     def _zoom_reset(self) -> None:
-        """Restablece el zoom a 100% (Ctrl+0)."""
+        """Restablece el zoom a 100% (Alt+0)."""
         self._zoom_level = 1.0
         self._zoom_cx = 0.5
         self._zoom_cy = 0.5
@@ -490,7 +523,7 @@ class RecordMeApp:
         logger.info("Zoom restablecido al 100%%.")
 
     def _pan_step(self, dx: float, dy: float) -> None:
-        """Desplaza el encuadre de zoom con las flechas del teclado (Ctrl+Flechas)."""
+        """Desplaza el encuadre de zoom con las flechas del teclado (Alt+Flechas o Flechas directas)."""
         if self._zoom_level <= 1.01:
             return
         self._zoom_cx = max(0.0, min(1.0, round(self._zoom_cx + dx, 3)))
@@ -646,12 +679,37 @@ class RecordMeApp:
         self.controller.set_region(screen_rect)
         self.toolbar.update_selected_region(screen_rect)
         if self.camera_preview:
-            self.camera_preview.update_capture_region(screen_rect)
+            try:
+                self.camera_preview.update_capture_region(screen_rect)
+            except Exception as e:
+                logger.debug("Aviso actualizando región en camera preview: %s", e)
         if self.teleprompter_widget:
-            self.teleprompter_widget.pause_scrolling()
+            try:
+                self.teleprompter_widget.pause_scrolling()
+            except Exception as e:
+                logger.debug("Aviso pausando teleprompter al detener: %s", e)
+
+    def _toggle_teleprompter(self) -> None:
+        """Alterna la visibilidad del teleprompter si ya fue configurado, o abre el editor si aún no existe."""
+        if self.teleprompter_widget is not None:
+            if self.teleprompter_widget.isVisible():
+                self.teleprompter_widget.hide()
+                logger.info("Teleprompter ocultado vía atajo Alt+T.")
+            else:
+                self.teleprompter_widget.show()
+                self.teleprompter_widget.raise_()
+                logger.info("Teleprompter restaurado vía atajo Alt+T.")
+            return
+
+        self._open_teleprompter_editor()
 
     def _open_teleprompter_editor(self) -> None:
         """Abre el editor completo del teleprompter de forma interactiva y no bloqueante."""
+        if self.teleprompter_editor is not None and self.teleprompter_editor.isVisible():
+            self.teleprompter_editor.raise_()
+            self.teleprompter_editor.activateWindow()
+            return
+
         if self.teleprompter_editor is None:
             self.teleprompter_editor = TeleprompterEditorDialog(
                 current_text=self.settings.teleprompter.last_script,
@@ -663,6 +721,7 @@ class RecordMeApp:
             self.teleprompter_editor.settings_applied.connect(self._on_teleprompter_applied)
             self.teleprompter_editor.test_requested.connect(self._on_teleprompter_test)
             self.teleprompter_editor.stop_test_requested.connect(self._on_teleprompter_stop_test)
+            self.teleprompter_editor.finished.connect(lambda: self.hotkey_service.set_text_input_active(False))
         else:
             self.teleprompter_editor.update_from_settings(self.settings.teleprompter)
 
@@ -680,7 +739,6 @@ class RecordMeApp:
             self.teleprompter_editor.move(x, y)
 
         self.hotkey_service.set_text_input_active(True)
-        self.teleprompter_editor.finished.connect(lambda: self.hotkey_service.set_text_input_active(False))
         self.teleprompter_editor.show()
         self.teleprompter_editor.raise_()
         self.teleprompter_editor.activateWindow()
@@ -764,23 +822,27 @@ class RecordMeApp:
         QApplication.quit()
 
     def _on_recording_finished(self, output_path: Path) -> None:
-        """Abre el explorador de archivos (Guardar como) para que el usuario elija directorio y nombre."""
-        # 1. Asegurar que la carpeta por defecto Videos/RecordMe exista siempre
+        """Abre el explorador de archivos (Guardar como) para que el usuario elija directorio y nombre de manera fluida e instantánea."""
+        # 1. Drenar eventos pendientes en el ciclo de Qt para garantizar respuesta inmediata y 0 lag
+        QApplication.processEvents()
+
+        # 2. Asegurar que la carpeta por defecto Videos/RecordMe exista siempre
         default_dir = get_default_recordings_dir()
         default_dir.mkdir(parents=True, exist_ok=True)
 
-        # 2. Desactivar atajos de teclado mientras el diálogo de guardado esté activo
+        # 3. Desactivar atajos de teclado mientras el diálogo de guardado esté activo
         self.hotkey_service.set_text_input_active(True)
         try:
             suggested_path = str(output_path.resolve())
             selected_path_str, _ = QFileDialog.getSaveFileName(
-                self.toolbar,
+                None,  # Usar ventana de nivel superior para que Windows no herede flags de Tool flotante
                 caption=tr("save_dialog_title"),
                 dir=suggested_path,
                 filter=f"{tr('save_dialog_filter')};;All Files (*.*)",
             )
         finally:
             self.hotkey_service.set_text_input_active(False)
+            QApplication.processEvents()
 
         if selected_path_str:
             target_path = Path(selected_path_str)

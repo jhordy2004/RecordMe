@@ -6,10 +6,10 @@
 
 **The next-generation, distraction-free screen recorder built for content creators, educators, presenters, and software engineers.**
 
-[![CI/CD Multiplatform Build](https://github.com/jhordy2004/RecordMe/actions/workflows/build.yml/badge.svg)](https://github.com/jhordy2004/RecordMe/actions/workflows/build.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#cross-platform-architecture)
+<a href="https://github.com/jhordy2004/RecordMe/actions/workflows/build.yml"><img src="https://github.com/jhordy2004/RecordMe/actions/workflows/build.yml/badge.svg" alt="CI/CD Multiplatform Build" height="28" /></a>
+<a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+" height="28" /></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL_v3-blue.svg" alt="License: AGPL v3" height="28" /></a>
+<a href="#cross-platform-architecture"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform" height="28" /></a>
 
 </div>
 
@@ -41,9 +41,9 @@ With RecordMe, your toolbars, widgets, and prompters remain completely invisible
   - Follow the mouse cursor dynamically or anchor to regions of interest.
 - **Live Privacy & Censor Boxes**:
   - Blur, pixelate, or mask sensitive passwords, API keys, and personal credentials in real time before encoding.
-- **Smart Global Hotkeys with Input Detection**:
-  - Global hotkeys (`R` to record/stop, `P` to pause/resume, `L` to select area, `M` for mic mute, `C` for camera, `T` for teleprompter, `X` for censorship).
-  - **Smart Focus Filter**: Keystrokes are ignored when you are typing inside browser search bars, inputs, terminals, or chat apps (WhatsApp, Slack, Discord). `Alt` combos are available as backup triggers.
+- **Smart Global Hotkeys with Input Protection**:
+  - Global hotkeys (`Alt+R` to record/stop, `Alt+P` to pause/resume, `Alt+L` to select area, `Alt+M` for mic mute, `Alt+C` for camera, `Alt+T` for teleprompter, `Alt+X` for censorship, `Alt+Q` to exit).
+  - **Zero Input Collisions**: All action shortcuts strictly use `Alt+<Key>`, preventing any accidental triggers when typing in browser search bars, terminals, Word, or messaging apps. Standard system and application shortcuts like copy (`Ctrl+C`), cut (`Ctrl+X`), and browser new tab (`Ctrl+T`) are fully preserved and collision-free.
 - **Clean Subprocess & Headless Output**:
   - Silent video rendering and muxing pipeline powered by bundled FFmpeg without terminal windows or command prompts popping up.
 - **100% Offline & Private**:
@@ -149,18 +149,20 @@ ruff check src/
 
 ## Shortcuts Reference
 
-| Shortcut | Alternative | Action |
-| :---: | :---: | :--- |
-| `R` | `Alt+R` | Start / Stop Recording |
-| `P` | `Alt+P` | Pause / Resume Recording |
-| `L` | `Alt+L` | Select Custom Capture Area |
-| `Esc` | — | Cancel / Reset Selection to Fullscreen |
-| `M` | `Alt+M` | Toggle Microphone Mute |
-| `C` | `Alt+C` | Toggle Webcam Overlay |
-| `T` | `Alt+T` | Toggle Teleprompter |
-| `X` | `Alt+X` | Add Censor / Blur Box |
-| `Ctrl + +` / `Ctrl + -` | — | Dynamic Zoom In / Out |
-| `Q` | `Alt+Q` | Quit RecordMe |
+| Shortcut | Action |
+| :---: | :--- |
+| `Alt+R` | Start / Stop Recording |
+| `Alt+P` | Pause / Resume Recording |
+| `Alt+L` | Select Custom Capture Area |
+| `Esc` | Cancel Selection / Reset to Fullscreen |
+| `Alt+M` | Toggle Microphone Mute |
+| `Alt+C` | Toggle Webcam Overlay |
+| `Alt+T` | Toggle Teleprompter |
+| `Alt+X` | Add Censor / Blur Box |
+| `Alt +, Alt -` | Dynamic Zoom In / Out |
+| `Alt+0` | Reset Zoom to 100% |
+| `Alt+Arrows` | Pan Zoomed View (or Arrow keys when zoomed) |
+| `Alt+Q` | Quit RecordMe |
 
 ---
 
@@ -179,3 +181,11 @@ Contributions, bug reports, and pull requests are warmly welcomed! Please feel f
 ## License
 
 RecordMe is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+
+---
+
+## Author's Words
+
+Hello, this project was actually born because I had problems with the Windows Snipping Tool. I was using it, but it wasn't recording the first 10 seconds of the recording. I got a little upset, and the best idea I could come up with was to create RecordMe.
+
+I hope you like it and that this program can help more than one person.

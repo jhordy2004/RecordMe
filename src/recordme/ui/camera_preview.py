@@ -52,6 +52,7 @@ class CameraPreviewWidget(QWidget):
 
     layout_updated = Signal(CameraLayout)
     close_requested = Signal()
+    _new_frame_signal = Signal(object)
 
     BORDER_GRAB = 8
     MIN_SIZE = 80
@@ -81,6 +82,7 @@ class CameraPreviewWidget(QWidget):
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.SizeAllCursor)
 
+        self._new_frame_signal.connect(self._render_frame_gui, Qt.ConnectionType.QueuedConnection)
         self._update_geometry_from_layout()
 
     def update_capture_region(self, region: Rect) -> None:
@@ -89,7 +91,17 @@ class CameraPreviewWidget(QWidget):
         self._sync_normalized_position()
 
     def update_frame(self, frame_bgr: npt.NDArray[np.uint8]) -> None:
-        """Recibe un nuevo fotograma BGR de la cámara, aplica fondo virtual si existe y actualiza el pixmap."""
+        """Recibe el frame desde el hilo de la cámara y lo transfiere al hilo GUI de forma segura."""
+        if not self.isVisible() or frame_bgr is None or frame_bgr.size == 0:
+            return
+        from PySide6.QtCore import QThread
+        if QThread.currentThread() == self.thread():
+            self._render_frame_gui(frame_bgr)
+        else:
+            self._new_frame_signal.emit(frame_bgr)
+
+    def _render_frame_gui(self, frame_bgr: npt.NDArray[np.uint8]) -> None:
+        """Procesa y dibuja el fotograma en el hilo principal de Qt para evitar bloqueos de GDI/DirectShow."""
         try:
             if not self.isVisible() or frame_bgr is None or frame_bgr.size == 0:
                 return

@@ -92,6 +92,8 @@ def test_toolbar_state_changes(qtbot: QtBot) -> None:
     # Transición a FINALIZING
     session_manager.transition_to(SessionState.FINALIZING)
     assert toolbar.btn_record.text() == "Guardando..."
+    assert toolbar._timer.isActive() is False
+    assert toolbar.btn_pause.isVisible() is False
 
 
 def test_recordme_app_instantiation(qtbot: QtBot) -> None:
@@ -119,13 +121,13 @@ def test_toolbar_hover_badge_display(qtbot: QtBot) -> None:
     toolbar._show_badge_for(toolbar.btn_area)
     assert toolbar._hover_badge.isVisible() is True
     assert toolbar._hover_badge._action_label.text() == "Atajo"
-    assert toolbar._hover_badge._key_badge.text() == "Alt+L / L"
+    assert toolbar._hover_badge._key_badge.text() == "Alt+L"
 
     # 2. Simular hover sobre btn_record
     toolbar._show_badge_for(toolbar.btn_record)
     assert toolbar._hover_badge.isVisible() is True
     assert toolbar._hover_badge._action_label.text() == "Atajo"
-    assert toolbar._hover_badge._key_badge.text() == "Alt+R / R"
+    assert toolbar._hover_badge._key_badge.text() == "Alt+R"
 
     # 3. Ocultar badge
     toolbar._hover_badge.hide_badge()
@@ -217,8 +219,8 @@ def test_region_selector_reopen_after_escape(qtbot: QtBot) -> None:
 
 
 def test_hotkey_suppression_when_text_input_focused(qtbot: QtBot, monkeypatch) -> None:
-    """Verifica que las teclas directas (R, P, L, etc.) se ignoren cuando el usuario escribe, pero Alt+Key funcione."""
-    from pynput.keyboard import Key, KeyCode
+    """Verifica que las teclas directas (R, P, L, etc.) sin Alt se ignoren, mientras Alt+Key active las acciones."""
+    from pynput.keyboard import KeyCode
 
     from recordme.platform_services.hotkeys import GlobalHotkeyService
 
@@ -236,10 +238,10 @@ def test_hotkey_suppression_when_text_input_focused(qtbot: QtBot, monkeypatch) -
     hotkeys._on_press(KeyCode.from_char("l"))
     hotkeys._on_press(KeyCode.from_char("p"))
 
-    # Ninguna acción directa debe dispararse mientras escribe
+    # Ninguna acción debe dispararse por teclas sueltas
     assert len(fired_actions) == 0
 
-    # Sin embargo, combinaciones con Alt explícitas deben funcionar incluso si está en un campo de texto
+    # Con Alt presionado, los atajos globales funcionan
     monkeypatch.setattr(hotkeys, "_is_alt_pressed", lambda: True)
     hotkeys._on_press(KeyCode.from_char("r"))
     assert "record" in fired_actions
@@ -248,14 +250,13 @@ def test_hotkey_suppression_when_text_input_focused(qtbot: QtBot, monkeypatch) -
     hotkeys._on_press(KeyCode.from_char("p"))
     assert "pause" in fired_actions
 
-    # Ahora simular que el usuario NO está en un campo de texto y suelta Alt
+    # Sin Alt, las teclas sueltas siguen ignorándose
     monkeypatch.setattr(hotkeys, "_is_alt_pressed", lambda: False)
-    monkeypatch.setattr(hotkeys, "_is_text_input_active_system_wide", lambda: False)
     fired_actions.clear()
     hotkeys._last_trigger_time.clear()
 
     hotkeys._on_press(KeyCode.from_char("r"))
-    assert "record" in fired_actions
+    assert len(fired_actions) == 0
 
 
 def test_escape_clears_selected_area_and_resets_fullscreen(qtbot: QtBot) -> None:
@@ -323,3 +324,57 @@ def test_toolbar_buttons_do_not_shrink_on_recording(qtbot: QtBot) -> None:
     assert toolbar.btn_cam.width() >= idle_cam_w
     assert toolbar.btn_teleprompter.width() >= idle_tele_w
     assert toolbar.btn_censor.width() >= idle_censor_w
+
+
+def test_session_state_transition_from_worker_thread_does_not_crash_toolbar(qtbot: QtBot) -> None:
+    """Verifica que transicionar a DONE desde un hilo secundario actualice la UI sin errores de killTimer."""
+    import threading
+
+    session_manager = SessionManager()
+    toolbar = FloatingToolbar(session_manager)
+    qtbot.addWidget(toolbar)
+    toolbar.show()
+
+    session_manager.transition_to(SessionState.CONFIGURING)
+    session_manager.transition_to(SessionState.COUNTDOWN)
+    session_manager.transition_to(SessionState.RECORDING)
+    session_manager.transition_to(SessionState.FINALIZING)
+
+    def worker() -> None:
+        session_manager.transition_to(SessionState.DONE)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+
+    # Drenar eventos de Qt para procesar la señal encolada en el hilo principal
+    qtbot.waitUntil(lambda: toolbar.btn_record.text() == "Grabar", timeout=2000)
+    assert toolbar.btn_pause.isVisible() is False
+    assert toolbar.btn_area.isVisible() is True
+
+
+def test_toolbar_timer_freezes_immediately_when_stop_is_clicked(qtbot: QtBot) -> None:
+    """Verifica que al hacer clic en Detener, el temporizador se congele en el acto sin seguir avanzando."""
+    session_manager = SessionManager()
+    toolbar = FloatingToolbar(session_manager)
+    qtbot.addWidget(toolbar)
+    toolbar.show()
+
+    session_manager.transition_to(SessionState.CONFIGURING)
+    session_manager.transition_to(SessionState.COUNTDOWN)
+    session_manager.transition_to(SessionState.RECORDING)
+
+    assert toolbar._timer.isActive() is True
+    # Simular avance del temporizador a 5 segundos
+    for _ in range(5):
+        toolbar._on_timer_tick()
+    assert toolbar.timer_label.text() == "00:05"
+
+    # Hacer clic en Detener
+    toolbar._on_record_clicked()
+
+    # El temporizador debe detenerse de inmediato y el botón pasar a 'Guardando...'
+    assert toolbar._timer.isActive() is False
+    assert toolbar.timer_label.text() == "00:05"
+    assert toolbar.btn_record.text() == "Guardando..."
+    assert toolbar.btn_pause.isVisible() is False

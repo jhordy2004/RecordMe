@@ -1,6 +1,7 @@
 """Controlador de máquina de estados de la sesión."""
 
 import logging
+import threading
 from collections.abc import Callable
 
 from recordme.core.events import SessionState
@@ -47,54 +48,61 @@ class SessionManager:
         self._state: SessionState = SessionState.IDLE
         self._listeners: list[Callable[[SessionState, SessionState], None]] = []
         self._last_error_message: str | None = None
+        self._lock = threading.Lock()
 
     @property
     def state(self) -> SessionState:
         """Estado actual de la sesión."""
-        return self._state
+        with self._lock:
+            return self._state
 
     @property
     def last_error(self) -> str | None:
         """Último mensaje de error si el estado es ERROR."""
-        return self._last_error_message
+        with self._lock:
+            return self._last_error_message
 
     def add_listener(self, listener: Callable[[SessionState, SessionState], None]) -> None:
         """Agrega un callback que recibe (estado_anterior, nuevo_estado)."""
-        if listener not in self._listeners:
-            self._listeners.append(listener)
+        with self._lock:
+            if listener not in self._listeners:
+                self._listeners.append(listener)
 
     def remove_listener(self, listener: Callable[[SessionState, SessionState], None]) -> None:
         """Elimina un callback previamente registrado."""
-        if listener in self._listeners:
-            self._listeners.remove(listener)
+        with self._lock:
+            if listener in self._listeners:
+                self._listeners.remove(listener)
 
     def transition_to(self, new_state: SessionState, error_message: str | None = None) -> bool:
         """Intenta transicionar a un nuevo estado si la regla lo permite."""
-        if new_state == self._state:
-            return True
+        with self._lock:
+            if new_state == self._state:
+                return True
 
-        allowed = VALID_TRANSITIONS.get(self._state, set())
-        if new_state not in allowed:
-            logger.warning(
-                "Transición de estado inválida: %s -> %s (permitidas: %s)",
-                self._state.name,
-                new_state.name,
-                [s.name for s in allowed],
-            )
-            return False
+            allowed = VALID_TRANSITIONS.get(self._state, set())
+            if new_state not in allowed:
+                logger.warning(
+                    "Transición de estado inválida: %s -> %s (permitidas: %s)",
+                    self._state.name,
+                    new_state.name,
+                    [s.name for s in allowed],
+                )
+                return False
 
-        old_state = self._state
-        self._state = new_state
-        if new_state == SessionState.ERROR:
-            self._last_error_message = error_message
-            logger.error("Sesión entró en estado ERROR: %s", error_message)
-        elif old_state == SessionState.ERROR:
-            self._last_error_message = None
+            old_state = self._state
+            self._state = new_state
+            if new_state == SessionState.ERROR:
+                self._last_error_message = error_message
+                logger.error("Sesión entró en estado ERROR: %s", error_message)
+            elif old_state == SessionState.ERROR:
+                self._last_error_message = None
 
-        logger.info("Transición de sesión: %s -> %s", old_state.name, new_state.name)
+            logger.info("Transición de sesión: %s -> %s", old_state.name, new_state.name)
+            listeners_snapshot = list(self._listeners)
 
-        # Notificar a los observadores
-        for listener in list(self._listeners):
+        # Notificar a los observadores de manera segura fuera del lock
+        for listener in listeners_snapshot:
             try:
                 listener(old_state, new_state)
             except Exception as e:

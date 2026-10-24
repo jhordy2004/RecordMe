@@ -10,22 +10,41 @@ from recordme.capture.qt_fallback import QtScreenCaptureBackend
 logger = logging.getLogger(__name__)
 
 
+_dxcam_available: bool | None = None
+
+
+def _check_dxcam_available() -> bool:
+    global _dxcam_available
+    if _dxcam_available is not None:
+        return _dxcam_available
+    if sys.platform != "win32":
+        _dxcam_available = False
+        return False
+    try:
+        import dxcam
+        cam = dxcam.create(output_color="BGR")
+        if cam is not None:
+            # NO llamar a cam.release() aquí. Llamar a release() destruye el duplicador COM
+            # exclusivo de DXGI y provoca fallos de acceso denegado (0x80070005) o dobles liberaciones
+            # al instanciar la captura inmediatamente después. Conservar la instancia permite reutilizarla limpiamente.
+            _dxcam_available = True
+            return True
+    except Exception as e:
+        logger.info("dxcam no disponible en este entorno (%s).", e)
+    _dxcam_available = False
+    return False
+
+
 def create_capture_backend() -> CaptureBackend:
     """Crea e inicializa el mejor backend de captura disponible en el entorno actual."""
-    # 1. En Windows, intentar dxcam si es viable
-    if sys.platform == "win32":
+    # 1. En Windows, intentar dxcam si es viable (con resultado cacheado para máxima velocidad)
+    if _check_dxcam_available():
         try:
-            import dxcam
-            # Prueba de humo de inicialización
-            test_cam = dxcam.create(output_color="BGR")
-            if test_cam is not None:
-                # Comprobar si puede capturar sin error de acceso denegado
-                test_cam.release()
-                from recordme.capture.windows_dxcam import WindowsDXCamBackend
-                logger.info("Usando backend de captura DXGI (dxcam).")
-                return WindowsDXCamBackend()
+            from recordme.capture.windows_dxcam import WindowsDXCamBackend
+            logger.info("Usando backend de captura DXGI (dxcam).")
+            return WindowsDXCamBackend()
         except Exception as e:
-            logger.info("dxcam no disponible en este entorno (%s). Probando fallbacks...", e)
+            logger.info("Fallo al instanciar WindowsDXCamBackend (%s). Probando fallbacks...", e)
 
     # 2. En macOS, usar backend ScreenCaptureKit con exclusión por SCContentFilter
     if sys.platform == "darwin":

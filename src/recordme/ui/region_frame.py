@@ -150,6 +150,8 @@ class RegionFrameWidget(QWidget):
         self._drag_start_geom: QRect | None = None
         self._is_recording = False
         self._is_locked = False
+        self._move_handle_rect: QRect = QRect()
+        self._is_move_hovered: bool = False
 
         # Botón '✕' situado afuera del área para eliminar el área definida
         self._close_btn = RegionCloseButton()
@@ -239,6 +241,15 @@ class RegionFrameWidget(QWidget):
         mask = mask.united(QRegion(0, 0, b, h))
         mask = mask.united(QRegion(w - b, 0, b, h))
 
+        # Añadir agarrador de movimiento en la parte superior si no está en grabación
+        if not self._is_locked:
+            handle_w = min(110, max(70, w - 60))
+            handle_h = 24
+            self._move_handle_rect = QRect((w - handle_w) // 2, 0, handle_w, handle_h)
+            mask = mask.united(QRegion(self._move_handle_rect))
+        else:
+            self._move_handle_rect = QRect()
+
         self.setMask(mask)
         self._close_btn.update_position(self.geometry())
 
@@ -269,10 +280,31 @@ class RegionFrameWidget(QWidget):
             painter.drawRect(0, h - corner_size, corner_size, corner_size)
             painter.drawRect(w - corner_size, h - corner_size, corner_size, corner_size)
 
+            # 3. Píldora / Agarrador para mover el área seleccionada
+            if self._move_handle_rect.isValid() and w >= 130:
+                hr = self._move_handle_rect.adjusted(0, 1, 0, -1)
+                is_active = self._is_move_hovered or self._active_edge == ResizeEdge.MOVE
+                bg_color = QColor(0, 180, 216, 240) if is_active else QColor(20, 20, 20, 230)
+                border_color = QColor(0, 210, 255) if is_active else QColor(0, 180, 216, 180)
+
+                painter.setBrush(bg_color)
+                painter.setPen(QPen(border_color, 1.2))
+                painter.drawRoundedRect(hr, 5, 5)
+
+                painter.setPen(QColor(255, 255, 255))
+                font = QFont("Segoe UI", 9)
+                font.setBold(True)
+                painter.setFont(font)
+                painter.drawText(hr, Qt.AlignmentFlag.AlignCenter, f"✥ {tr('region_frame_move')}")
+
     def _determine_edge(self, pos: QPoint) -> ResizeEdge:
         """Determina qué borde o esquina está bajo el cursor."""
         if self._is_locked:
             return ResizeEdge.NONE
+
+        # Si el cursor está sobre la píldora de mover
+        if self._move_handle_rect.isValid() and self._move_handle_rect.contains(pos):
+            return ResizeEdge.MOVE
 
         x = pos.x()
         y = pos.y()
@@ -318,12 +350,22 @@ class RegionFrameWidget(QWidget):
                 self._drag_start_geom = self.geometry()
                 event.accept()
 
+    def leaveEvent(self, event: Any) -> None:  # noqa: N802
+        super().leaveEvent(event)
+        if self._is_move_hovered:
+            self._is_move_hovered = False
+            self.update()
+
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         """Actualiza la forma del cursor o redimensiona/mueve el marco."""
         if self._drag_start_pos is None or self._drag_start_geom is None or self._active_edge == ResizeEdge.NONE:
             pos = event.pos()
             edge = self._determine_edge(pos)
             self._update_cursor_shape(edge)
+            was_hovered = self._is_move_hovered
+            self._is_move_hovered = (self._move_handle_rect.isValid() and self._move_handle_rect.contains(pos))
+            if was_hovered != self._is_move_hovered:
+                self.update()
             return
 
         delta = event.globalPosition().toPoint() - self._drag_start_pos

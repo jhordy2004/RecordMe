@@ -75,16 +75,29 @@ class MacOSScreenCaptureKitBackend(CaptureBackend):
         else:
             self._use_fallback = True
 
-        # Fallback a MSS para desarrollo / entornos sin SCK
+        # Fallback a MSS o QtScreenCaptureBackend para desarrollo / entornos sin SCK
         self._fallback_backend = MSSCaptureBackend()
+        if self._fallback_backend.start(region, fps):
+            return True
+
+        from recordme.capture.qt_fallback import QtScreenCaptureBackend
+        self._fallback_backend = QtScreenCaptureBackend()
         return self._fallback_backend.start(region, fps)
 
     def _init_native_sck(self, region: Rect, fps: int, excluded_ids: set[int]) -> bool:
         """Configura el flujo SCStream nativo de ScreenCaptureKit si PyObjC está instalado en macOS."""
         try:
-            import ScreenCaptureKit as SCK
+            import ScreenCaptureKit  # noqa: F401
+            from CoreMedia import CMSampleBufferGetImageBuffer
             from Foundation import NSObject
-            import objc
+            from Quartz import (
+                CVPixelBufferGetBytesPerRow,
+                CVPixelBufferGetData,
+                CVPixelBufferGetHeight,
+                CVPixelBufferGetWidth,
+                CVPixelBufferLockBaseAddress,
+                CVPixelBufferUnlockBaseAddress,
+            )
 
             # Definir delegado de salida de frames
             backend_self = self
@@ -93,16 +106,6 @@ class MacOSScreenCaptureKitBackend(CaptureBackend):
                 def stream_didOutputSampleBuffer_ofType_(self, stream, sample_buffer, buffer_type):  # noqa: N802
                     try:
                         # Extraer buffer CVPixelBuffer del CMSampleBuffer
-                        from Quartz import (
-                            CVPixelBufferGetData,
-                            CVPixelBufferGetBytesPerRow,
-                            CVPixelBufferGetHeight,
-                            CVPixelBufferGetWidth,
-                            CVPixelBufferLockBaseAddress,
-                            CVPixelBufferUnlockBaseAddress,
-                        )
-                        from CoreMedia import CMSampleBufferGetImageBuffer
-
                         pixel_buffer = CMSampleBufferGetImageBuffer(sample_buffer)
                         if not pixel_buffer:
                             return

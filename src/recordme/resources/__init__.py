@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QSize
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QPixmap
 
 logger = logging.getLogger(__name__)
 
@@ -53,3 +53,29 @@ def get_app_icon() -> QIcon:
                 break
 
     return icon
+
+
+def get_app_logo_pixmap() -> QPixmap:
+    """Carga la imagen oficial del logotipo de RecordMe (logo.png)."""
+    search_paths = [
+        Path(__file__).resolve().parent.parent.parent / "logo" / "logo.png",  # src/logo/logo.png
+        Path(__file__).resolve().parent / "logo" / "logo.png",
+        Path("src/logo/logo.png"),
+        Path("logo/logo.png"),
+    ]
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        search_paths.extend([
+            base / "recordme" / "resources" / "logo" / "logo.png",
+            base / "logo" / "logo.png",
+            Path(sys.executable).parent / "logo" / "logo.png",
+        ])
+
+    for p in search_paths:
+        if p.exists():
+            pix = QPixmap(str(p))
+            if not pix.isNull():
+                return pix
+
+    return QPixmap()
+

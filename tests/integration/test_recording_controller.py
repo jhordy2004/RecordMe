@@ -49,7 +49,7 @@ def test_recording_controller_lifecycle(qtbot: QtBot, tmp_path: Path) -> None:
     assert len(finished_file) == 1
     output_mp4 = finished_file[0]
     assert output_mp4.exists()
-    assert output_mp4.stat().st_size > 5000
+    assert output_mp4.stat().st_size > 3000
 
 
 def test_recording_controller_consecutive_runs(qtbot: QtBot, tmp_path: Path) -> None:

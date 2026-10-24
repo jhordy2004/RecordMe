@@ -21,10 +21,10 @@ def test_macos_platform_services_exclusion_and_permissions() -> None:
     assert macos_svc.set_dpi_awareness() is True
 
     class DummyWidget:
-        def winId(self):
+        def winId(self):  # noqa: N802
             return 123456
 
-        def isVisible(self):
+        def isVisible(self):  # noqa: N802
             return True
 
     widget = DummyWidget()

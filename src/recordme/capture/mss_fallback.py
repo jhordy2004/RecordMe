@@ -31,8 +31,23 @@ class MSSCaptureBackend(CaptureBackend):
         """Inicia el hilo de captura periódico de mss."""
         self._region = region.to_even()
         self._fps = max(1, fps)
-        self._is_capturing = True
 
+        # Probar una captura inicial para verificar que el entorno gráfico permite BitBlt
+        try:
+            mss_cls = getattr(mss, "MSS", mss.mss)
+            with mss_cls() as test_sct:
+                monitor = {
+                    "top": self._region.y,
+                    "left": self._region.x,
+                    "width": self._region.width,
+                    "height": self._region.height,
+                }
+                test_sct.grab(monitor)
+        except Exception as e:
+            logger.info("MSS no puede capturar la pantalla en esta sesión (%s). Probando siguiente fallback.", e)
+            return False
+
+        self._is_capturing = True
         self._thread = threading.Thread(target=self._capture_loop, daemon=True, name="MSS-CaptureThread")
         self._thread.start()
         logger.info("MSS backend iniciado en región %s a %d FPS.", self._region, self._fps)
