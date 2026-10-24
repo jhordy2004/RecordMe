@@ -36,6 +36,8 @@ python -m PyInstaller \
     --collect-all "imageio_ffmpeg" \
     --collect-all "sounddevice" \
     --collect-all "soundfile" \
+    --collect-all "soundcard" \
+    --collect-all "noisereduce" \
     --collect-all "pynput" \
     --paths "src" \
     "src/recordme/__main__.py"

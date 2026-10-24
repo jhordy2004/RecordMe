@@ -32,11 +32,13 @@ if imageio_bin_dir.exists():
         binaries.append((str(f), "."))
 
 # Recolectar módulos y metadatos de paquetes críticos
-for pkg in ("pynput", "sounddevice", "soundfile", "platformdirs", "imageio_ffmpeg", "dxcam", "docx"):
+hidden_from_collect = []
+for pkg in ("pynput", "sounddevice", "soundfile", "platformdirs", "imageio_ffmpeg", "dxcam", "docx", "soundcard", "noisereduce"):
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
         datas.extend(pkg_datas)
         binaries.extend(pkg_binaries)
+        hidden_from_collect.extend(pkg_hidden)
     except Exception:
         pass
 
@@ -49,6 +51,16 @@ hiddenimports = [
     "mss",
     "sounddevice",
     "soundfile",
+    "soundcard",
+    "noisereduce",
+    "scipy",
+    "scipy.signal",
+    "email",
+    "email.parser",
+    "email.mime",
+    "email.mime.text",
+    "email.mime.multipart",
+    "email.utils",
     "pynput",
     "pynput.keyboard",
     "pynput.mouse",
@@ -63,7 +75,7 @@ hiddenimports = [
     "recordme.capture.windows_dxcam",
     "recordme.capture.mss_fallback",
     "recordme.capture.qt_fallback",
-]
+] + hidden_from_collect
 
 a = Analysis(
     [str(src_dir / "recordme" / "__main__.py")],
@@ -74,7 +86,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "unittest", "email", "http", "xmlrpc"],
+    excludes=["tkinter", "unittest"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
