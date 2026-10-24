@@ -2,10 +2,22 @@
 # Script de empaquetado de RecordMe para Linux (AppImage)
 set -e
 
-echo "=== Iniciando empaquetado de RecordMe para Linux (AppImage) ==="
-
 APP_NAME="RecordMe"
-VERSION="0.1.0"
+
+# Resolver versión dinámicamente si se ejecuta desde tag de Git (ej. v0.1.1 -> 0.1.1)
+VERSION="${1:-}"
+if [ -z "${VERSION}" ]; then
+    if [ -n "${GITHUB_REF_NAME}" ] && [[ "${GITHUB_REF_NAME}" == v* ]]; then
+        VERSION="${GITHUB_REF_NAME#v}"
+    elif [ -n "${APP_VERSION}" ]; then
+        VERSION="${APP_VERSION}"
+    else
+        VERSION=$(python3 -c "import re; m = re.search(r'__version__\s*=\s*[\"\\\']([^\"\\\']+)[\"\\\']', open('src/recordme/__init__.py').read()); print(m.group(1) if m else '0.1.1')" 2>/dev/null || echo "0.1.1")
+    fi
+fi
+
+echo "=== Iniciando empaquetado de RecordMe v${VERSION} para Linux (AppImage) ==="
+
 APP_DIR="dist/RecordMe.AppDir"
 RELEASE_DIR="Release"
 

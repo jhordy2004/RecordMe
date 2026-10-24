@@ -1,6 +1,6 @@
 [project]
 name = "recordme"
-version = "0.1.0"
+version = "0.1.1"
 description = "Grabador de pantalla con cámara, zoom en vivo, censura y teleprompter"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"

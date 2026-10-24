@@ -48,8 +48,8 @@ jobs:
           name: windows-release
           path: |
             Release/RecordMe.exe
-            Release/RecordMe-v0.1.0-windows-x64.zip
-            Release/RecordMe_Setup_v0.1.0.exe
+            Release/*.zip
+            Release/*Setup*.exe
 
   # --------------------------------------------------------------------------
   # 2. MACOS: Genera RecordMe.app y RecordMe-v0.1.0-macOS.dmg

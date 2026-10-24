@@ -1,17 +1,42 @@
 # Script automatizado de compilación y empaquetado para Windows
 # Genera:
 # 1. Ejecutable OneFile portable: Release/RecordMe.exe
-# 2. Paquete comprimido OneDir: Release/RecordMe-v0.1.0-windows-x64.zip
-# 3. Instalador profesional Inno Setup: Release/RecordMe_Setup_v0.1.0.exe
+# 2. Paquete comprimido OneDir: Release/RecordMe-v<Version>-windows-x64.zip
+# 3. Instalador profesional Inno Setup: Release/RecordMe_Setup_v<Version>.exe
 # Y replica en la carpeta Relase según solicitado.
+
+param(
+    [string]$Version = ""
+)
 
 $ErrorActionPreference = "Stop"
 
+$ProjectRoot = $PSScriptRoot
+
+# Resolver versión automáticamente si no se suministra
+if (-not $Version) {
+    if ($env:GITHUB_REF_NAME -and $env:GITHUB_REF_NAME.StartsWith("v")) {
+        $Version = $env:GITHUB_REF_NAME.Substring(1)
+    } elseif ($env:APP_VERSION) {
+        $Version = $env:APP_VERSION
+    } else {
+        $initPy = Join-Path $ProjectRoot "src\recordme\__init__.py"
+        if (Test-Path $initPy) {
+            $match = Select-String -Path $initPy -Pattern '__version__\s*=\s*["'']([^"'']+)["'']'
+            if ($match) {
+                $Version = $match.Matches[0].Groups[1].Value
+            }
+        }
+    }
+}
+if (-not $Version) {
+    $Version = "0.1.1"
+}
+
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "  RecordMe - Compilación y Empaquetado Release v0.1.0     " -ForegroundColor Cyan
+Write-Host "  RecordMe - Compilación y Empaquetado Release v$Version   " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
-$ProjectRoot = $PSScriptRoot
 $ReleaseDir = Join-Path $ProjectRoot "Release"
 $RelaseDir = Join-Path $ProjectRoot "Relase"
 
@@ -43,12 +68,12 @@ if (Test-Path $OneFileExe) {
 
 # 4. Crear ZIP de la versión OneDir
 $OneDirFolder = Join-Path $ProjectRoot "dist\RecordMe_dir"
-$ZipTarget = Join-Path $ReleaseDir "RecordMe-v0.1.0-windows-x64.zip"
+$ZipTarget = Join-Path $ReleaseDir "RecordMe-v${Version}-windows-x64.zip"
 if (Test-Path $OneDirFolder) {
-    Write-Host "`n[3/4] Creando archivo ZIP portable de la distribución OneDir..." -ForegroundColor Green
+    Write-Host "`n[3/4] Creando archivo ZIP portable de la distribución OneDir ($ZipTarget)..." -ForegroundColor Green
     if (Test-Path $ZipTarget) { Remove-Item $ZipTarget -Force }
     Compress-Archive -Path "$OneDirFolder\*" -DestinationPath $ZipTarget -CompressionLevel Optimal
-    Copy-Item -Path $ZipTarget -Destination (Join-Path $RelaseDir "RecordMe-v0.1.0-windows-x64.zip") -Force
+    Copy-Item -Path $ZipTarget -Destination (Join-Path $RelaseDir "RecordMe-v${Version}-windows-x64.zip") -Force
 }
 
 # 5. Compilar instalador con Inno Setup
@@ -69,12 +94,12 @@ foreach ($p in $ISCC_Paths) {
 
 if ($ISCC) {
     Write-Host "Compilador Inno Setup detectado: $ISCC" -ForegroundColor Cyan
-    & $ISCC (Join-Path $ProjectRoot "installer.iss")
+    & $ISCC "/DMyAppVersion=$Version" "/DOutputBaseFilename=RecordMe_Setup_v$Version" (Join-Path $ProjectRoot "installer.iss")
     if ($LASTEXITCODE -eq 0) {
         Write-Host "Instalador compilado exitosamente." -ForegroundColor Green
-        $Installer = Join-Path $ReleaseDir "RecordMe_Setup_v0.1.0.exe"
+        $Installer = Join-Path $ReleaseDir "RecordMe_Setup_v${Version}.exe"
         if (Test-Path $Installer) {
-            Copy-Item -Path $Installer -Destination (Join-Path $RelaseDir "RecordMe_Setup_v0.1.0.exe") -Force
+            Copy-Item -Path $Installer -Destination (Join-Path $RelaseDir "RecordMe_Setup_v${Version}.exe") -Force
         }
     } else {
         Write-Warning "Fallo la compilación de Inno Setup."
